@@ -20,6 +20,17 @@
 *.3gp
 *.3g2
 
+# Subtitle files
+*.srt
+*.sub
+*.smi
+*.ssa
+*.ass
+*.vtt
+
+# Document files
+*.pdf
+
 # Video/Audio temporary files
 *.part
 *.temp
