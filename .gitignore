@@ -31,6 +31,10 @@
 # Document files
 *.pdf
 
+# Text and HTML files
+*.html
+*.txt
+
 # Video/Audio temporary files
 *.part
 *.temp
