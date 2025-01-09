@@ -16,7 +16,9 @@ from download_utils import (
     download_and_process_generic_video,
     download_and_process_html,
     download_and_process_generic_m3u8_link,
-    download_and_process_with_custom_processor
+    download_and_process_with_custom_processor,
+    download_and_process_dynamic_html,
+    download_and_process_with_link_extractor
 )
 import csv
 from typing import Dict, List
