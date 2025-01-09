@@ -6,7 +6,7 @@ It uses Playwright to monitor network requests and capture the streaming URL.
 
 import logging
 import asyncio
-from typing import Optional
+from typing import Optional, Tuple
 import time
 from playwright.sync_api import sync_playwright
 
@@ -69,24 +69,20 @@ def extract_senato_m3u8(url: str, max_wait_time: int = 8) -> str:
     except Exception as e:
         raise ValueError(f"Failed to extract m3u8 URL from {url}: {str(e)}")
 
-def process_video_link(url: str) -> tuple[str, str]:
-    """Extract downloadable video link from Italian Senate video page.
-    
-    This function handles the extraction of m3u8 playlist URLs from
-    Italian Senate video pages by monitoring network requests.
+def process_video_link(url: str) -> Tuple[str, str]:
+    """
+    Process a video page URL and return the actual downloadable link and its type.
     
     Args:
-        url: The video page URL to process
+        url: The URL to process
         
     Returns:
-        tuple[str, str]: (downloadable_url, link_type)
-        where link_type is 'm3u8_link' for Italian Senate videos
+        Tuple[str, str]: (downloadable_url, link_type)
+        where link_type is one of: 'mp4_video_link', 'm3u8_link', etc.
+        matching the keys in DOWNLOAD_FUNCTIONS
         
-    Example:
-        url = "https://webtv.senato.it/video/..."
-        m3u8_url, link_type = process_video_link(url)
-        # m3u8_url will be like "https://senato-vod.senato.it/.../playlist.m3u8"
-        # link_type will be "m3u8_link"
+    Raises:
+        Any exception that occurs during processing
     """
     try:
         if 'webtv.senato.it' not in url:

@@ -12,6 +12,12 @@ PROJECT_NAME=Downloading/countries/italy
 DIRECTORY=/itet-stor/${ETH_USERNAME}/net_scratch/${PROJECT_NAME}
 CONDA_ENVIRONMENT=video_processing
 
+# Export library path to ensure shared libraries are found
+export LD_LIBRARY_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs/${CONDA_ENVIRONMENT}/lib:$LD_LIBRARY_PATH
+
+# Add current directory to Python path
+export PYTHONPATH=${DIRECTORY}:${PYTHONPATH}
+
 # Calculate start and end indices for this job
 TOTAL_FILES=2696  # Total number of sessions (minus header)
 FILES_PER_JOB=540  # Each job handles ~540 files
@@ -27,6 +33,7 @@ cd ${DIRECTORY}
 
 # Activate conda
 source /itet-stor/${ETH_USERNAME}/net_scratch/conda/bin/activate
+export CONDA_ENVS_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs
 conda activate ${CONDA_ENVIRONMENT}
 
 # Create logs directory if it doesn't exist

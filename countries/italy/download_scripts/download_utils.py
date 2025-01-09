@@ -9,7 +9,7 @@ import logging
 import yt_dlp
 import random
 import requests
-from typing import List, Optional, Protocol, Union
+from typing import List, Optional, Protocol, Union, Tuple, Dict, Any
 import csv
 from datetime import datetime
 from supabase_config import start_download, complete_download, fail_download
@@ -34,7 +34,7 @@ class TranscriptProcessor(Protocol):
 
 class VideoLinkExtractor(Protocol):
     """Protocol defining the interface for video link extraction functions."""
-    def __call__(self, url: str) -> tuple[str, str]:
+    def __call__(self, url: str) -> Tuple[str, str]:
         """
         Process a video page URL and return the actual downloadable link and its type.
         
@@ -42,7 +42,7 @@ class VideoLinkExtractor(Protocol):
             url: The URL to process
             
         Returns:
-            tuple[str, str]: (downloadable_url, link_type)
+            Tuple[str, str]: (downloadable_url, link_type)
             where link_type is one of: 'mp4_video_link', 'm3u8_link', etc.
             matching the keys in DOWNLOAD_FUNCTIONS
             
@@ -55,7 +55,7 @@ def download_and_process_with_link_extractor(
     url: str,
     output_filename: str,
     extractor: VideoLinkExtractor,
-    download_functions: dict
+    download_functions: Dict[str, Any]
 ) -> bool:
     """
     Extract downloadable link using custom extractor and process with appropriate downloader.

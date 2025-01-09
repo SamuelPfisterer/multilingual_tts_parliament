@@ -50,6 +50,12 @@ PROJECT_NAME=Downloading/countries/[parliament-name]
 DIRECTORY=/itet-stor/${ETH_USERNAME}/net_scratch/${PROJECT_NAME}
 CONDA_ENVIRONMENT=video_processing
 
+# Export library path to ensure shared libraries are found
+export LD_LIBRARY_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs/${CONDA_ENVIRONMENT}/lib:$LD_LIBRARY_PATH
+
+# Add current directory to Python path
+export PYTHONPATH=${DIRECTORY}:${PYTHONPATH}
+
 # For testing, we'll only process the first 2 files
 START_IDX=0
 END_IDX=2
@@ -58,6 +64,7 @@ cd ${DIRECTORY}
 
 # Activate conda
 source /itet-stor/${ETH_USERNAME}/net_scratch/conda/bin/activate
+export CONDA_ENVS_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs
 conda activate ${CONDA_ENVIRONMENT}
 
 # Create logs directory if it doesn't exist
@@ -95,6 +102,12 @@ PROJECT_NAME=Downloading/countries/[parliament-name]
 DIRECTORY=/itet-stor/${ETH_USERNAME}/net_scratch/${PROJECT_NAME}
 CONDA_ENVIRONMENT=video_processing
 
+# Export library path to ensure shared libraries are found
+export LD_LIBRARY_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs/${CONDA_ENVIRONMENT}/lib:$LD_LIBRARY_PATH
+
+# Add current directory to Python path
+export PYTHONPATH=${DIRECTORY}:${PYTHONPATH}
+
 # Calculate start and end indices for this job
 # Adjust these numbers based on your CSV file size
 TOTAL_FILES=7000  # Replace with your actual number of sessions
@@ -111,6 +124,7 @@ cd ${DIRECTORY}
 
 # Activate conda
 source /itet-stor/${ETH_USERNAME}/net_scratch/conda/bin/activate
+export CONDA_ENVS_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs
 conda activate ${CONDA_ENVIRONMENT}
 
 # Create logs directory if it doesn't exist
