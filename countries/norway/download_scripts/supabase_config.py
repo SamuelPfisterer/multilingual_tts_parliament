@@ -1,5 +1,5 @@
 """
-Supabase configuration and utility functions for the Croatian Parliament download system.
+Supabase configuration and utility functions for the Italian Parliament download system.
 """
 
 from datetime import datetime
@@ -12,7 +12,7 @@ SUPABASE_URL = "https://jyrujzmpicrqjcdwfwwr.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp5cnVqem1waWNycWpjZHdmd3dyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzYwOTI3ODcsImV4cCI6MjA1MTY2ODc4N30.jzAOM2BFVAH25kZNfR4ownHYqRF_XXqpYq9DiERi-Lk"
 
 # Constants
-PARLIAMENT_ID = 'hungary'
+PARLIAMENT_ID = 'norway'
 STATUS_PENDING = 'pending'
 STATUS_DOWNLOADING = 'downloading'
 STATUS_COMPLETED = 'completed'
@@ -40,6 +40,27 @@ class SupabaseClient:
 def get_supabase() -> Client:
     """Get the Supabase client instance."""
     return SupabaseClient().client
+
+def session_exists(session_id: str) -> bool:
+    """Check if a session already exists in Supabase.
+    
+    Args:
+        session_id: Unique identifier for the download session
+        
+    Returns:
+        bool: True if session exists, False otherwise
+    """
+    try:
+        client = get_supabase()
+        response = client.table('download_status')\
+            .select('session_id')\
+            .eq('session_id', session_id)\
+            .eq('parliament_id', PARLIAMENT_ID)\
+            .execute()
+        return len(response.data) > 0
+    except Exception as e:
+        logging.error(f"Error checking session existence: {str(e)}")
+        return False  # Assume session doesn't exist if we can't check
 
 def start_download(session_id: str, modality: str) -> None:
     """Record download start."""

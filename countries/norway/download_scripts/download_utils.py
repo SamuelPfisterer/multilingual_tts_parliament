@@ -9,33 +9,94 @@ import logging
 import yt_dlp
 import random
 import requests
-from typing import List, Optional, Protocol, Union
+from typing import List, Optional, Protocol, Union, Tuple, Dict, Any
 import csv
 from datetime import datetime
 from supabase_config import start_download, complete_download, fail_download
+from playwright.sync_api import sync_playwright
 
 class TranscriptProcessor(Protocol):
     """Protocol defining the interface for transcript processing functions."""
-    def __call__(self, url: str) -> Union[str, bytes]:
+    def __call__(self, url: str) -> Tuple[Union[str, bytes], str]:
         """
-        Process a transcript URL and return the content.
+        Process a transcript URL and return the content and its type.
         
         Args:
             url: The URL to process
             
         Returns:
-            Processed content as string or bytes
+            Tuple[Union[str, bytes], str]: (content, type) where:
+            - content is either the processed content or a URL
+            - type is one of: 'pdf_link', 'html_content', 'text_content'
             
         Raises:
             Any exception that occurs during processing
         """
         ...
 
+class VideoLinkExtractor(Protocol):
+    """Protocol defining the interface for video link extraction functions."""
+    def __call__(self, url: str) -> Tuple[str, str]:
+        """
+        Process a video page URL and return the actual downloadable link and its type.
+        
+        Args:
+            url: The URL to process
+            
+        Returns:
+            Tuple[str, str]: (downloadable_url, link_type)
+            where link_type is one of: 'mp4_video_link', 'm3u8_link', etc.
+            matching the keys in DOWNLOAD_FUNCTIONS
+            
+        Raises:
+            Any exception that occurs during processing
+        """
+        ...
+
+def download_and_process_with_link_extractor(
+    url: str,
+    output_filename: str,
+    extractor: VideoLinkExtractor,
+    download_functions: Dict[str, Any]
+) -> bool:
+    """
+    Extract downloadable link using custom extractor and process with appropriate downloader.
+    
+    Args:
+        url: Source URL to process
+        output_filename: Where to save the processed file
+        extractor: Function that processes the URL and returns downloadable link
+        download_functions: Dictionary mapping link types to download functions
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Extract the actual downloadable link and its type
+        logging.info(f"Extracting downloadable link from: {url}")
+        downloadable_url, link_type = extractor(url)
+        
+        # Validate the link type
+        if link_type not in download_functions:
+            raise ValueError(f"Unsupported link type returned by extractor: {link_type}")
+            
+        # Get the appropriate download function
+        download_func = download_functions[link_type]
+        
+        logging.info(f"Extracted {link_type} link: {downloadable_url}")
+        
+        # Download using the existing function
+        return download_func(downloadable_url, output_filename)
+        
+    except Exception as e:
+        logging.error(f"Error processing {url} with link extractor: {str(e)}")
+        return False
+
 def download_and_process_with_custom_processor(
     url: str, 
     output_filename: str,
     processor: TranscriptProcessor,
-    file_extension: str
+    file_extension: Optional[str] = None
 ) -> bool:
     """
     Download and process content using a custom processor function.
@@ -43,43 +104,39 @@ def download_and_process_with_custom_processor(
     Args:
         url: Source URL to process
         output_filename: Base filename for output (without extension)
-        processor: Function that processes the URL and returns content
-        file_extension: Extension for the output file (e.g., 'html', 'txt')
+        processor: Function that processes the URL and returns content with type
+        file_extension: Optional extension override (if not provided, determined by content type)
         
     Returns:
         bool: True if successful, False otherwise
     """
     try:
-        # Create temp directory
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        temp_dir = os.path.join(base_dir, f'temp_downloaded_{file_extension}')
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # Setup paths
-        temp_file = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.{file_extension}')
-        final_file = f'{output_filename}.{file_extension}'
-        
         # Process content using provided processor
-        content = processor(url)
+        content, content_type = processor(url)
         
-        # Save to temp file
+        # Handle different content types
+        if content_type == 'pdf_link':
+            return download_and_process_pdf(content, output_filename)
+        
+        # For direct content (HTML or text), write to appropriate file
+        if file_extension:
+            extension = file_extension
+        else:
+            extension = 'html' if content_type == 'html_content' else 'txt'
+        final_file = f'{output_filename}.{extension}'
+        
+        # Write directly to final file
         mode = 'wb' if isinstance(content, bytes) else 'w'
         encoding = None if isinstance(content, bytes) else 'utf-8'
-        with open(temp_file, mode, encoding=encoding) as f:
+        with open(final_file, mode, encoding=encoding) as f:
             f.write(content)
-        
-        # Move to final location
-        shutil.move(temp_file, final_file)
+            
         logging.info(f"Successfully processed: {url}")
-        
         return True
         
     except Exception as e:
         logging.error(f"Error processing {url}: {str(e)}")
         return False
-    finally:
-        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
-            os.rmdir(temp_dir)
 
 # Map local modalities to Supabase modalities
 SUPABASE_MODALITY_MAPPING = {
@@ -147,12 +204,34 @@ def with_retry(func, args, column_info, session_id):
     - Functions returning error string/True
     
     Maintains original retry logic with wait times and adds Supabase tracking.
+    Also checks if file already exists before attempting download.
     """
     wait_times = [120, 240, 480, 960]  # 2, 4, 8, 16 minutes in seconds
     modality = column_info['modality']
     
     # Map local modality to Supabase modality
     supabase_modality = SUPABASE_MODALITY_MAPPING[modality]
+    
+    # Check if file already exists (with appropriate extension)
+    output_filename = args[1]  # args[1] is always the output_filename in our download functions
+    extensions = {
+        'audio': '.opus',
+        'transcript': '.html' if 'html' in column_info['subfolder'] else '.pdf',
+        'subtitle': '.srt'
+    }
+    final_path = f"{output_filename}{extensions[modality]}"
+    
+    if os.path.exists(final_path):
+        logging.info(f"File already exists, skipping download: {final_path}")
+        # Still mark as complete in Supabase
+        metrics = None
+        if modality == 'audio':
+            metrics = {
+                'duration': get_video_duration(output_filename),
+                'size': get_file_size(output_filename)
+            }
+        complete_download(session_id, supabase_modality, metrics)
+        return True
     
     # Start download tracking
     start_download(session_id, supabase_modality)
@@ -244,14 +323,14 @@ def get_bundestag_video_id(url):
 # Download and process audio links
 def download_and_process_mp4_video(mp4_link: str, output_filename: str) -> bool:
     """
-    Download MP4 and convert to opus audio format.
+    Download MP4 using yt-dlp and convert to opus audio format.
     
     Args:
         mp4_link: Direct link to MP4 file
         output_filename: Desired output filename (without extension)
     """
     try:
-        # Create temp directory in parent folder (Germany/)
+        # Create temp directory in parent folder (Sweden/)
         base_dir = os.path.dirname(os.path.dirname(__file__))
         temp_dir = os.path.join(base_dir, 'temp_downloaded_audio')
         os.makedirs(temp_dir, exist_ok=True)
@@ -260,17 +339,18 @@ def download_and_process_mp4_video(mp4_link: str, output_filename: str) -> bool:
         temp_opus = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.opus')
         final_opus = f'{output_filename}.opus'
 
-        # Download and extract audio directly with ffmpeg
+        # yt-dlp command with direct audio extraction and conversion
         download_command = [
-            'ffmpeg',
-            '-i', mp4_link,
-            '-vn',               # No video
-            '-c:a', 'libopus',   # Opus codec
-            '-b:a', '96k',       # 96 kbps bitrate
-            '-ac', '1',          # Mono
-            '-ar', '24000',      # 24kHz
-            '-application', 'voip',  # Optimize for speech
-            temp_opus
+            'yt-dlp',
+            '-f', 'mp4',         # Force MP4 format
+            '-x',                # Extract audio
+            '--audio-format', 'opus',  # Convert to opus
+            '--audio-quality', '96k',  # 96 kbps
+            '--postprocessor-args', '-ac 1 -ar 24000 -application voip',  # Opus settings
+            '--no-playlist',     # Don't download playlists
+            '--no-continue',     # Don't resume partial downloads
+            '-o', temp_opus,     # Output file
+            mp4_link
         ]
         
         # Download and convert in one step
@@ -278,7 +358,7 @@ def download_and_process_mp4_video(mp4_link: str, output_filename: str) -> bool:
         result = subprocess.run(download_command, capture_output=True, text=True)
         
         if result.returncode != 0:
-            logging.error(f"FFmpeg error: {result.stderr}")
+            logging.error(f"yt-dlp error: {result.stderr}")
             return False
         
         # Move to final location
@@ -750,4 +830,54 @@ def download_and_process_generic_m3u8_link(url: str, output_filename: str) -> bo
     
     # Use the existing m3u8 download function
     return download_and_process_m3u8_video(m3u8_url, output_filename)
+
+def download_and_process_dynamic_html(html_link: str, output_filename: str) -> bool:
+    """
+    Download HTML file using Playwright to handle dynamically loaded content.
+    This function waits for the page to be fully loaded before saving the content.
+    """
+    try:
+        add_download_delay()  # Add delay before download
+        # Create temp directory in parent folder
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        temp_dir = os.path.join(base_dir, 'temp_downloaded_dynamic_html')
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        # Setup temporary and final paths
+        temp_html = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.html')
+        final_html = f'{output_filename}.html'
+
+        # Use Playwright to get the fully rendered page
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            
+            # Navigate and wait for network idle
+            page.goto(html_link, wait_until='networkidle')
+            
+            # Wait additional time for any dynamic content
+            page.wait_for_timeout(2000)  # 2 seconds
+            
+            # Get the full HTML content
+            content = page.content()
+            
+            # Save to temp file
+            with open(temp_html, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            browser.close()
+        
+        # Move to final location
+        shutil.move(temp_html, final_html)
+        logging.info(f"Successfully processed dynamic HTML: {html_link}")
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error processing dynamic HTML {html_link}: {str(e)}")
+        return False
+    finally:
+        # Cleanup temp directory if empty
+        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+            os.rmdir(temp_dir)
 

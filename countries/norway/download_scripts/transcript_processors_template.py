@@ -1,51 +1,38 @@
-from typing import Union
+from typing import Union, Tuple
 
-def process_transcript_html(url: str) -> str:
+def process_transcript(url: str) -> Tuple[Union[str, bytes], str]:
     """
-    Process a transcript URL and return HTML content.
+    Process transcript URL and return content with its type.
     
     Args:
         url: The URL to process
         
     Returns:
-        str: The processed HTML content
+        Tuple[Union[str, bytes], str]: (content, type) where:
+        - content is either the processed content or a URL
+        - type is one of: 'pdf_link', 'html_content', 'text_content'
+        
+    Example returns:
+        - ("http://example.com/doc.pdf", "pdf_link")
+        - ("<html>...</html>", "html_content")
+        - ("Plain text...", "text_content")
         
     Raises:
         ValueError: If processing fails
         Any other exceptions that occur during processing
     """
     try:
-        # Your HTML processing logic here
-        # Example:
-        # - Fetch the webpage
-        # - Extract relevant HTML content
-        # - Process/clean the HTML as needed
-        raise NotImplementedError("Please implement your HTML processing logic")
+        # Your processing logic here
+        # Example 1: Return PDF link
+        # return "http://example.com/doc.pdf", "pdf_link"
+        
+        # Example 2: Return processed HTML
+        # return "<html><body>Processed content</body></html>", "html_content"
+        
+        # Example 3: Return processed text
+        # return "Plain text content", "text_content"
+        
+        raise NotImplementedError("Please implement your transcript processing logic")
         
     except Exception as e:
-        raise ValueError(f"Failed to process HTML transcript: {str(e)}")
-
-def process_transcript_text(url: str) -> str:
-    """
-    Process a transcript URL and return plain text content.
-    
-    Args:
-        url: The URL to process
-        
-    Returns:
-        str: The processed text content
-        
-    Raises:
-        ValueError: If processing fails
-        Any other exceptions that occur during processing
-    """
-    try:
-        # Your text processing logic here
-        # Example:
-        # - Fetch the webpage
-        # - Extract text content
-        # - Clean/format the text as needed
-        raise NotImplementedError("Please implement your text processing logic")
-        
-    except Exception as e:
-        raise ValueError(f"Failed to process text transcript: {str(e)}") 
+        raise ValueError(f"Failed to process transcript: {str(e)}") 

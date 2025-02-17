@@ -23,6 +23,39 @@ At least one of these ID columns must be present:
 - `video_id`: Unique identifier for video content
 - `transcript_id`: Unique identifier for transcript content
 
+### Multiple Videos per Transcript
+The script supports multiple videos sharing the same transcript. To use this feature correctly:
+
+1. **IMPORTANT**: Both `video_id` AND `transcript_id` MUST be present in each row
+2. Create a separate row for each video, even if they share the same transcript
+3. Use the same `transcript_id` for videos that share a transcript
+4. Each row must have a unique `video_id`
+
+The files are stored as follows:
+- Video/audio files are stored under their respective `video_id`
+- Transcript files are stored under their `transcript_id`
+
+Example CSV showing correct usage:
+```csv
+video_id,transcript_id,mp4_video_link,transcript_link
+video1,transcript1,https://example.com/video1.mp4,https://example.com/transcript1.html
+video2,transcript1,https://example.com/video2.mp4,https://example.com/transcript1.html
+video3,transcript2,https://example.com/video3.mp4,https://example.com/transcript2.html
+```
+
+In this example:
+- `video1` and `video2` share the same transcript (`transcript1`)
+- `video3` has its own transcript (`transcript2`)
+- Each video has its own unique `video_id`
+- The transcript is specified in each row where it's used
+
+Note: If only one ID is present (either `video_id` or `transcript_id`), all files for that row will be stored under that single ID. However, this should only be used for single video-transcript pairs, not for sharing transcripts across multiple videos.
+
+The script includes duplicate detection to avoid re-downloading:
+- Checks if files already exist before downloading
+- Uses Supabase to track processed sessions
+- Stores files consistently under their respective IDs
+
 ### Optional URL Columns
 Each URL must point to a file with the correct extension:
 
@@ -32,6 +65,8 @@ Each URL must point to a file with the correct extension:
 - `m3u8_link`: Stream URL ending in `.m3u8`
 - `generic_video_link`: Any video URL supported by yt-dlp
 - `generic_m3u8_link`: Webpage containing embedded m3u8 stream
+- `processed_video_link`: Link requiring custom extraction to get downloadable URL
+  - Requires implementing a video link extractor (see Video Link Extraction section)
   - To check if your URL is supported:
     1. Install yt-dlp: `pip install yt-dlp`
     2. Test your URL: `yt-dlp --simulate URL`
@@ -39,6 +74,7 @@ Each URL must point to a file with the correct extension:
 #### Transcript Sources
 - `pdf_link`: Direct link ending in `.pdf`
 - `html_link`: Link to HTML transcript page
+- `dynamic_html_link`: Link to dynamically loaded HTML page (uses Playwright)
 - `processed_transcript_html_link`: Link to transcript page that needs custom HTML processing
 - `processed_transcript_text_link`: Link to transcript page that needs custom text processing
 
@@ -63,6 +99,7 @@ BASE_DIR/
 ├── downloaded_transcript/         # All transcript content
 │   ├── pdf_transcripts/         # PDF format transcripts
 │   ├── html_transcripts/        # HTML format transcripts
+│   ├── dynamic_html_transcripts/ # Dynamically loaded HTML transcripts
 │   ├── processed_html_transcripts/  # Custom processed HTML transcripts
 │   └── processed_text_transcripts/  # Custom processed text transcripts
 └── downloaded_subtitle/           # All subtitle content
@@ -71,34 +108,121 @@ BASE_DIR/
 
 ## Custom Transcript Processing
 
-For parliaments that require custom processing of transcripts (e.g., extracting content from complex web pages), you can use the processed transcript columns. To enable this:
+For parliaments that require custom processing of transcripts (e.g., extracting content from complex web pages or finding PDF links), you can use the processed transcript column. To enable this:
 
 1. Create a `transcript_processors.py` file in your parliament's directory
-2. Implement one or both processor functions:
-   - `process_transcript_html(url: str) -> str`: Returns processed HTML content
-   - `process_transcript_text(url: str) -> str`: Returns processed text content
-3. Use the corresponding columns in your CSV:
-   - `processed_transcript_html_link`: For HTML output
-   - `processed_transcript_text_link`: For text output
+2. Implement the processor function:
+   ```python
+   def process_transcript(url: str) -> Tuple[Union[str, bytes], str]:
+       """Process transcript URL and return content with its type.
+       
+       Args:
+           url: The URL to process
+           
+       Returns:
+           Tuple[Union[str, bytes], str]: (content, type) where:
+           - content is either the processed content or a URL
+           - type is one of: 'pdf_link', 'html_content', 'text_content'
+           
+       Example returns:
+           - ("http://example.com/doc.pdf", "pdf_link")
+           - ("<html>...</html>", "html_content")
+           - ("Plain text...", "text_content")
+       """
+       try:
+           # Your processing logic here
+           # Example: Extract PDF link from page
+           pdf_url = extract_pdf_from_page(url)
+           return pdf_url, 'pdf_link'
+       except Exception as e:
+           raise ValueError(f"Failed to process transcript: {str(e)}")
+   ```
+3. Use the `processed_transcript_link` column in your CSV
 
-Example processor implementation:
-```python
-def process_transcript_html(url: str) -> str:
-    """Process a transcript URL and return HTML content."""
-    try:
-        # Your HTML processing logic here
-        return processed_html_content
-    except Exception as e:
-        raise ValueError(f"Failed to process HTML transcript: {str(e)}")
+The processor must return a tuple containing:
+- `content`: Either processed content or a URL
+- `type`: One of the supported types:
+  - 'pdf_link': For URLs pointing to PDF files (will be downloaded)
+  - 'html_content': For processed HTML content (saved directly)
+  - 'text_content': For processed text content (saved directly)
 
-def process_transcript_text(url: str) -> str:
-    """Process a transcript URL and return text content."""
-    try:
-        # Your text processing logic here
-        return processed_text_content
-    except Exception as e:
-        raise ValueError(f"Failed to process text transcript: {str(e)}")
+This allows you to:
+1. Extract PDF links from complex pages
+2. Process and clean HTML content
+3. Extract and format text content
+4. Handle different transcript formats consistently
+
+Example CSV usage:
+```csv
+video_id,processed_transcript_link
+12345,https://parliament.example.com/transcript/12345
 ```
+
+The system will:
+1. Call your processor to get the content/URL and its type
+2. Based on the type:
+   - For 'pdf_link': Download the PDF
+   - For 'html_content': Save the HTML directly
+   - For 'text_content': Save the text directly
+3. Store the file in the appropriate format
+
+## Video Link Extraction
+
+For parliaments that require custom processing to obtain downloadable video links (e.g., extracting m3u8 URLs from video pages):
+
+1. Create a `video_link_extractors.py` file in your parliament's directory
+2. Implement the extractor function:
+   ```python
+   def process_video_link(url: str) -> tuple[str, str]:
+       """Extract downloadable link from video page.
+       
+       Args:
+           url: The video page URL to process
+           
+       Returns:
+           tuple[str, str]: (downloadable_url, link_type) where
+           link_type is one of: 'mp4_video_link', 'm3u8_link', etc.
+           
+       Example:
+           url = "https://parliament.example.com/video/12345"
+           # Extract m3u8 URL from page
+           m3u8_url = extract_m3u8_from_page(url)
+           return m3u8_url, 'm3u8_link'
+       """
+       try:
+           # Your extraction logic here
+           # e.g., fetch page, parse HTML, find video URL
+           return downloadable_url, link_type
+       except Exception as e:
+           raise ValueError(f"Failed to extract video link: {str(e)}")
+   ```
+3. Use the `processed_video_link` column in your CSV
+
+The extractor must return a tuple containing:
+- `downloadable_url`: The actual URL that can be downloaded
+- `link_type`: One of the supported types matching existing download functions:
+  - 'mp4_video_link'
+  - 'm3u8_link'
+  - 'youtube_link'
+  - 'generic_video_link'
+  - 'generic_m3u8_link'
+
+This allows you to:
+1. Handle complex video pages that don't expose direct download links
+2. Extract embedded video URLs
+3. Transform video page URLs into downloadable formats
+4. Reuse existing download functionality for the extracted links
+
+Example CSV usage:
+```csv
+video_id,processed_video_link
+12345,https://parliament.example.com/video/12345
+```
+
+The system will:
+1. Call your extractor to get the actual video URL
+2. Use the appropriate download function based on the returned link type
+3. Process and save the video as usual
 
 ## Example Usage
 
@@ -204,3 +328,14 @@ For different types of sources, you might need to:
    - Convert between subtitle formats
    - Handle timing synchronization
    - Process character encoding
+
+### Dependencies
+
+For dynamic HTML content, you'll need to install Playwright:
+
+```bash
+pip install playwright
+playwright install chromium
+```
+
+This is required for downloading transcripts from pages that load content dynamically using JavaScript.
