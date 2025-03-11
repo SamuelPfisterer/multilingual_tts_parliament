@@ -18,11 +18,13 @@ from download_utils import (
     download_and_process_generic_m3u8_link,
     download_and_process_with_custom_processor,
     download_and_process_dynamic_html,
-    download_and_process_with_link_extractor
+    download_and_process_with_link_extractor,
+    get_file_size,
+    get_video_duration
 )
 import csv
-from typing import Dict, List
-from supabase_config import create_download_entry, session_exists
+from typing import Dict, List, Set, Optional, Tuple
+from supabase_config import create_download_entry, session_exists, complete_download, start_download
 
 # Import the transcript processors individually
 # Note: Users need to implement these in their transcript_processors.py
@@ -214,6 +216,39 @@ def validate_processor_availability(df: pd.DataFrame) -> None:
             "is available. Please implement process_transcript_text in transcript_processors.py"
         )
 
+def get_session_id(row: pd.Series) -> str:
+    """
+    Generate a unique session ID for the row.
+    
+    If both video_id and transcript_id are present and different, 
+    use a combination of both to ensure uniqueness.
+    
+    Args:
+        row: DataFrame row containing session information
+        
+    Returns:
+        Unique session ID string
+    """
+    video_id = row.get('video_id')
+    transcript_id = row.get('transcript_id')
+    
+    if video_id and transcript_id and video_id != transcript_id:
+        return f"{video_id}_{transcript_id}"
+    
+    return video_id or transcript_id or str(row.name)  # Fallback to row index if no IDs
+
+def get_video_id(row: pd.Series) -> Optional[str]:
+    """
+    Extract just the video ID from the row.
+    
+    Args:
+        row: DataFrame row containing session information
+        
+    Returns:
+        Video ID string or None if not present
+    """
+    return row.get('video_id')
+
 def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetings_full_links.csv') -> None:
     """Process and download parliamentary meeting content for a range of entries.
 
@@ -267,25 +302,33 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
         skipped_sessions = 0
         failed_downloads = {key: [] for key in DIRECTORIES}
         failed_download_links = []
+        
+        # Track already downloaded videos to avoid duplicates
+        downloaded_videos = set()
 
         # Process each row in the DataFrame
         for _, row in tqdm(df.iterrows(), total=len(df), desc="Processing videos"):
-            id_value = row.get('video_id') or row.get('transcript_id')
-            if not id_value:
+            # Generate a unique session ID for this row
+            session_id = get_session_id(row)
+            
+            # Get the video ID (may be the same across multiple rows)
+            video_id = get_video_id(row)
+            
+            if not session_id:
                 logging.error("No valid ID found in row. Ensure 'video_id' or 'transcript_id' is present.")
                 continue
 
             # Check if session already exists in Supabase
-            if session_exists(id_value):
-                logging.info(f"Skipping session {id_value} - already exists in Supabase")
+            if session_exists(session_id):
+                logging.info(f"Skipping session {session_id} - already exists in Supabase")
                 skipped_sessions += 1
                 continue
 
             # Create download entry in Supabase
             try:
-                create_download_entry(id_value)
+                create_download_entry(session_id)
             except Exception as e:
-                logging.error(f"Failed to create Supabase entry for {id_value}: {str(e)}")
+                logging.error(f"Failed to create Supabase entry for {session_id}: {str(e)}")
                 continue
 
             for column, download_func in DOWNLOAD_FUNCTIONS.items():
@@ -295,30 +338,62 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
                         modality = column_info['modality']
                         subfolder = column_info['subfolder']
                         
+                        # For audio/video content, use video_id for the filename if available
+                        # This ensures all transcripts reference the same video file
+                        if modality == 'audio' and video_id:
+                            filename_id = video_id
+                        else:
+                            filename_id = session_id
+                            
                         # Create filename with subfolder
                         filename = os.path.join(
                             DIRECTORIES[modality],
                             subfolder,
-                            str(id_value)
+                            str(filename_id)
                         )
+                        
+                        # For audio/video content, check if we've already downloaded this video
+                        if modality == 'audio' and video_id:
+                            # Check if this video has already been downloaded
+                            video_path = f"{filename}.opus"
+                            if video_id in downloaded_videos or os.path.exists(video_path):
+                                logging.info(f"Video {video_id} already downloaded, skipping download for session {session_id}")
+                                
+                                # Mark the video as completed in Supabase with 0 duration
+                                # First mark as downloading (required by Supabase workflow)
+                                start_download(session_id, 'video')
+                                
+                                # Then mark as completed with 0 duration for this session
+                                # (actual metrics are recorded with the first download)
+                                zero_metrics = {
+                                    'duration': 0,  # 0 seconds duration for duplicate videos
+                                    'size': 0       # 0 bytes size for duplicate videos
+                                }
+                                complete_download(session_id, 'video', zero_metrics)
+                                
+                                # Continue to next column (skip the download)
+                                continue
                         
                         if not with_retry(
                             func=download_func,
                             args=(row[column], filename),
                             column_info=column_info,
-                            session_id=id_value
+                            session_id=session_id
                         ):
-                            failed_downloads[modality].append(id_value)
-                            logging.error(f"Failed to download {column}: {id_value}")
+                            failed_downloads[modality].append(session_id)
+                            logging.error(f"Failed to download {column}: {session_id}")
+                        elif modality == 'audio' and video_id:
+                            # Mark this video as downloaded
+                            downloaded_videos.add(video_id)
                     except Exception as e:
-                        logging.error(f"Error processing {column} for {id_value}: {str(e)}")
+                        logging.error(f"Error processing {column} for {session_id}: {str(e)}")
 
             if not failed_downloads[modality]:
                 successful_downloads += 1
-                logging.info(f"Successfully processed all files for: {id_value}")
+                logging.info(f"Successfully processed all files for: {session_id}")
             else:
                 failed_download_links.append(row.get('link', 'Unknown link'))
-                logging.error(f"Failed to process: {id_value}")
+                logging.error(f"Failed to process: {session_id}")
 
         # Log failed downloads to results file
         with open(RESULTS_FILE, 'a', newline='') as f:
