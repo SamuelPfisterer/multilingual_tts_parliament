@@ -1,0 +1,196 @@
+"""Video link extractor for the Danish Parliament."""
+
+import asyncio
+from typing import Tuple
+import aiohttp
+import logging
+import traceback
+from playwright.async_api import async_playwright
+
+async def extract_src_url(page) -> str:
+    """Extract src_url from the video element.
+    
+    Args:
+        page: Playwright page object
+        
+    Returns:
+        str: The extracted source URL
+        
+    Raises:
+        ValueError: If extraction fails
+    """
+    try:
+        logging.info("Searching for video player...")
+        
+        # Find the outer iframe (mobiltv)
+        logging.info("Looking for mobiltv iframe...")
+        outer_iframe = await page.wait_for_selector('iframe[src*="mobiltv.ft.dk"]', timeout=10000)
+        if not outer_iframe:
+            raise ValueError("No mobiltv iframe found")
+            
+        # Get outer iframe content
+        logging.info("Getting content frame for mobiltv iframe...")
+        outer_frame = await outer_iframe.content_frame()
+        if not outer_frame:
+            raise ValueError("Could not get content frame for mobiltv iframe")
+        
+        # Wait for frame to load
+        logging.info("Waiting for outer frame to load...")
+        await asyncio.sleep(3)
+        
+        # Find Kaltura iframe within the outer frame
+        logging.info("Looking for Kaltura iframe...")
+        inner_iframe = await outer_frame.wait_for_selector('iframe[id*="kaltura_player"]', timeout=10000)
+        if not inner_iframe:
+            raise ValueError("No Kaltura iframe found")
+        
+        # Get Kaltura iframe content
+        logging.info("Getting content frame for Kaltura iframe...")
+        kaltura_frame = await inner_iframe.content_frame()
+        if not kaltura_frame:
+            raise ValueError("Could not get content frame for Kaltura iframe")
+        
+        # Wait for frame to load
+        logging.info("Waiting for Kaltura frame to load...")
+        await asyncio.sleep(3)
+        
+        # Find video element
+        logging.info("Looking for video element...")
+        video = await kaltura_frame.wait_for_selector('video', timeout=10000)
+        if not video:
+            raise ValueError("No video element found")
+        
+        # Extract src attribute
+        logging.info("Extracting src attribute...")
+        src_url = await video.get_attribute('src')
+        if not src_url:
+            raise ValueError("No src attribute found on video element")
+            
+        logging.info(f"Found src_url: {src_url}")
+        return src_url
+    
+    except Exception as e:
+        logging.error(f"Error extracting video src: {str(e)}")
+        logging.error(f"Stack trace: {traceback.format_exc()}")
+        raise ValueError(f"Error extracting video src: {str(e)}")
+
+async def follow_redirect(src_url: str) -> str:
+    """Follow redirects to get the final MP3 URL.
+    
+    Args:
+        src_url: The source URL to follow
+        
+    Returns:
+        str: The final MP3 URL
+        
+    Raises:
+        ValueError: If redirect following fails
+    """
+    if not src_url:
+        raise ValueError("No source URL provided")
+        
+    logging.info(f"Following redirects for: {src_url}")
+    
+    try:
+        # Set headers to mimic browser
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Referer': 'https://www.ft.dk/'
+        }
+        
+        # Follow redirects using aiohttp
+        logging.info("Creating aiohttp session...")
+        async with aiohttp.ClientSession() as session:
+            logging.info(f"Making request to: {src_url}")
+            async with session.get(src_url, headers=headers, allow_redirects=True) as response:
+                logging.info(f"Response status: {response.status}")
+                final_url = str(response.url)
+                logging.info(f"Final URL after redirects: {final_url}")
+                return final_url
+    
+    except Exception as e:
+        logging.error(f"Error following redirects: {str(e)}")
+        logging.error(f"Stack trace: {traceback.format_exc()}")
+        raise ValueError(f"Error following redirects: {str(e)}")
+
+async def _process_video_link_async(url: str) -> Tuple[str, str]:
+    """Async implementation of the video link extraction.
+    
+    Args:
+        url: The video page URL to process
+        
+    Returns:
+        tuple[str, str]: (downloadable_url, link_type)
+        
+    Raises:
+        ValueError: If extraction fails
+    """
+    browser = None
+    try:
+        logging.info(f"Starting async video extraction process for URL: {url}")
+        async with async_playwright() as playwright:
+            logging.info("Launching browser...")
+            # Launch browser - using non-headless for debugging
+            browser = await playwright.chromium.launch(headless=True)
+            context = await browser.new_context()
+            page = await context.new_page()
+
+            # Navigate to the URL
+            logging.info(f"Navigating to URL: {url}")
+            await page.goto(url, timeout=60000)
+            
+            # Wait for page to load
+            logging.info("Waiting for page to load...")
+            await asyncio.sleep(5)
+            
+            # Extract src_url
+            logging.info("Extracting source URL...")
+            src_url = await extract_src_url(page)
+            
+            # Close browser
+            logging.info("Closing browser...")
+            await browser.close()
+            browser = None
+            
+            # Follow redirects to get MP3 URL
+            if src_url:
+                logging.info("Following redirects...")
+                mp3_url = await follow_redirect(src_url)
+                logging.info(f"Successfully extracted MP3 URL: {mp3_url}")
+                return mp3_url, 'generic_video_link'
+            else:
+                raise ValueError("Failed to extract source URL")
+            
+    except Exception as e:
+        logging.error(f"Failed to process video link {url}: {str(e)}")
+        logging.error(f"Stack trace: {traceback.format_exc()}")
+        if browser:
+            logging.info("Closing browser after error...")
+            await browser.close()
+        raise ValueError(f"Failed to extract video link: {str(e)}")
+
+def process_video_link(url: str) -> Tuple[str, str]:
+    """Extract downloadable video link from the Danish Parliament video page.
+    
+    Args:
+        url: The video page URL to process
+        
+    Returns:
+        tuple[str, str]: (downloadable_url, link_type)
+        
+    Raises:
+        ValueError: If extraction fails
+    """
+    logging.info(f"process_video_link called with URL: {url}")
+    try:
+        # Run the async extraction in a synchronous context
+        # This is necessary because the main.py expects a synchronous function
+        logging.info("Starting asyncio.run for video extraction")
+        result = asyncio.run(_process_video_link_async(url))
+        logging.info(f"Asyncio completed with result: {result}")
+        return result
+    except Exception as e:
+        logging.error(f"Failed to process video link {url}: {str(e)}")
+        logging.error(f"Stack trace: {traceback.format_exc()}")
+        raise ValueError(f"Failed to extract video link: {str(e)}") 
