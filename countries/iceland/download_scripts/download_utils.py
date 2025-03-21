@@ -130,6 +130,9 @@ def download_and_process_with_custom_processor(
     Returns:
         bool: True if successful, False otherwise
     """
+    # Initialize temp_dir to None before any code paths
+    temp_dir = None
+    
     try:
         # Extract transcript ID from the output filename
         transcript_id = os.path.basename(output_filename)
@@ -202,7 +205,8 @@ def download_and_process_with_custom_processor(
         logging.error(f"Error processing {url}: {str(e)}")
         return False
     finally:
-        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+        # Check if temp_dir exists and is not None before trying to clean it up
+        if temp_dir and os.path.exists(temp_dir) and not os.listdir(temp_dir):
             os.rmdir(temp_dir)
 
 # Map local modalities to Supabase modalities

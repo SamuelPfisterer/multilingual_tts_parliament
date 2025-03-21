@@ -157,12 +157,12 @@ DOWNLOAD_FUNCTIONS = {
     'dynamic_html_link': download_and_process_dynamic_html,
     'srt_link': download_and_process_srt,
     
-    # New processed transcript functions
-    'processed_transcript_html_link': lambda url, output: download_and_process_with_custom_processor(
-        url, output, process_transcript_html, 'html'
+    # New processed transcript functions - update these to accept and pass additional kwargs
+    'processed_transcript_html_link': lambda url, output, **kwargs: download_and_process_with_custom_processor(
+        url, output, process_transcript_html, 'html', **kwargs
     ),
-    'processed_transcript_text_link': lambda url, output: download_and_process_with_custom_processor(
-        url, output, process_transcript_text, 'txt'
+    'processed_transcript_text_link': lambda url, output, **kwargs: download_and_process_with_custom_processor(
+        url, output, process_transcript_text, 'txt', **kwargs
     ),
     
     # New processed video function
