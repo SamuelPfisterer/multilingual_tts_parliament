@@ -249,7 +249,8 @@ def get_video_id(row: pd.Series) -> Optional[str]:
     """
     return row.get('video_id')
 
-def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetings_full_links.csv') -> None:
+def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetings_full_links.csv', 
+         batch_storage: bool = False, update_frequency: int = 10) -> None:
     """Process and download parliamentary meeting content for a range of entries.
 
     Downloads various media types (video, audio, subtitles, transcripts) for parliamentary
@@ -260,6 +261,8 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
         start_idx: Starting index in the CSV file to process
         end_idx: Ending index in the CSV file to process
         csv_file: Name of the input CSV file containing meeting information
+        batch_storage: Whether to use batch storage for transcripts
+        update_frequency: How often to update batch files (every N transcripts)
 
     Raises:
         FileNotFoundError: If the specified CSV file doesn't exist
@@ -268,6 +271,9 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
     job_id = os.getenv('SLURM_ARRAY_TASK_ID', 'interactive')
     setup_logging(job_id)
     logging.info(f"Starting processing for videos {start_idx} to {end_idx}")
+    
+    if batch_storage:
+        logging.info(f"Batch storage enabled. Update frequency: every {update_frequency} transcripts")
 
     if not os.path.exists(RESULTS_FILE):
         with open(RESULTS_FILE, 'w', newline='') as f:
@@ -374,15 +380,34 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
                                 # Continue to next column (skip the download)
                                 continue
                         
-                        if not with_retry(
-                            func=download_func,
-                            args=(row[column], filename),
-                            column_info=column_info,
-                            session_id=session_id
-                        ):
-                            failed_downloads[modality].append(session_id)
-                            logging.error(f"Failed to download {column}: {session_id}")
-                        elif modality == 'audio' and video_id:
+                        # For transcript processors that support batch storage
+                        if batch_storage and column in ['processed_transcript_html_link', 'processed_transcript_text_link']:
+                            if not with_retry(
+                                func=lambda *args: download_func(
+                                    *args, 
+                                    batch_storage=batch_storage,
+                                    update_frequency=update_frequency,
+                                    start_idx=start_idx,
+                                    end_idx=end_idx
+                                ),
+                                args=(row[column], filename),
+                                column_info=column_info,
+                                session_id=session_id
+                            ):
+                                failed_downloads[modality].append(session_id)
+                                logging.error(f"Failed to download {column}: {session_id}")
+                        else:
+                            # Regular download function call
+                            if not with_retry(
+                                func=download_func,
+                                args=(row[column], filename),
+                                column_info=column_info,
+                                session_id=session_id
+                            ):
+                                failed_downloads[modality].append(session_id)
+                                logging.error(f"Failed to download {column}: {session_id}")
+                        
+                        if modality == 'audio' and video_id:
                             # Mark this video as downloaded
                             downloaded_videos.add(video_id)
                     except Exception as e:
@@ -422,6 +447,8 @@ if __name__ == "__main__":
     parser.add_argument("--start_idx", type=int, required=True, help="Starting index for processing")
     parser.add_argument("--end_idx", type=int, required=True, help="Ending index for processing")
     parser.add_argument("--csv_file", type=str, default='danish_parliament_meetings_full_links.csv', help="CSV file name")
+    parser.add_argument("--batch_storage", action="store_true", help="Store transcripts in batch JSON files")
+    parser.add_argument("--update_frequency", type=int, default=10, help="How often to update batch files (every N transcripts)")
 
     args = parser.parse_args()
-    main(args.start_idx, args.end_idx, args.csv_file)
+    main(args.start_idx, args.end_idx, args.csv_file, args.batch_storage, args.update_frequency)

@@ -20,8 +20,8 @@ export LD_LIBRARY_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs/${CONDA
 export PYTHONPATH=${DIRECTORY}:${PYTHONPATH}
 
 # For testing, we'll only process the first 2 files
-START_IDX=0
-END_IDX=2
+START_IDX=100
+END_IDX=105
 
 cd ${DIRECTORY}
 

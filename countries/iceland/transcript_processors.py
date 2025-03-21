@@ -5,6 +5,10 @@ import time
 import random
 from typing import Union
 
+# Proxy configuration
+PROXY_URL = "http://island:ausgeTrickst=)@168.151.206.16:20000"
+PROXY_CONFIG = {'http': PROXY_URL, 'https': PROXY_URL}
+
 def process_transcript_html(url: str) -> str:
     """
     Process a transcript URL and return HTML content from the Icelandic Parliament website.
@@ -31,6 +35,9 @@ def process_transcript_html(url: str) -> str:
                 'mobile': False
             }
         )
+        
+        # Apply proxy settings
+        scraper.proxies = PROXY_CONFIG
         
         # Get the main transcript page
         response = scraper.get(url)
@@ -76,6 +83,9 @@ def process_transcript_text(url: str) -> str:
                 'mobile': False
             }
         )
+        
+        # Apply proxy settings
+        scraper.proxies = PROXY_CONFIG
         
         # Get the main transcript page
         response = scraper.get(url)

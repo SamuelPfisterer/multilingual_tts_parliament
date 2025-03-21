@@ -15,6 +15,20 @@ from datetime import datetime
 from supabase_config import start_download, complete_download, fail_download
 from playwright.sync_api import sync_playwright
 
+# Proxy configuration
+PROXY_URL = "http://island:ausgeTrickst=)@168.151.206.16:20000"
+PROXY_CONFIG = {'http': PROXY_URL, 'https': PROXY_URL}
+
+try:
+    from batch_storage import BatchStorageManager
+except ImportError:
+    # Try relative import
+    try:
+        from .batch_storage import BatchStorageManager
+    except ImportError:
+        BatchStorageManager = None
+        logging.info("BatchStorageManager not available. Batch storage will be disabled.")
+
 class TranscriptProcessor(Protocol):
     """Protocol defining the interface for transcript processing functions."""
     def __call__(self, url: str) -> Union[str, bytes]:
@@ -94,7 +108,11 @@ def download_and_process_with_custom_processor(
     url: str, 
     output_filename: str,
     processor: TranscriptProcessor,
-    file_extension: str
+    file_extension: str,
+    batch_storage=False,
+    update_frequency=10,
+    start_idx=0,
+    end_idx=0
 ) -> bool:
     """
     Download and process content using a custom processor function.
@@ -104,34 +122,81 @@ def download_and_process_with_custom_processor(
         output_filename: Base filename for output (without extension)
         processor: Function that processes the URL and returns content
         file_extension: Extension for the output file (e.g., 'html', 'txt')
+        batch_storage: Whether to use batch storage
+        update_frequency: How often to update the batch file
+        start_idx: Starting row index for this process
+        end_idx: Ending row index for this process
         
     Returns:
         bool: True if successful, False otherwise
     """
     try:
-        # Create temp directory
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        temp_dir = os.path.join(base_dir, f'temp_downloaded_{file_extension}')
-        os.makedirs(temp_dir, exist_ok=True)
+        # Extract transcript ID from the output filename
+        transcript_id = os.path.basename(output_filename)
         
-        # Setup paths
-        temp_file = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.{file_extension}')
-        final_file = f'{output_filename}.{file_extension}'
+        # Get the subfolder path
+        subfolder_path = os.path.dirname(output_filename)
         
-        # Process content using provided processor
-        content = processor(url)
-        
-        # Save to temp file
-        mode = 'wb' if isinstance(content, bytes) else 'w'
-        encoding = None if isinstance(content, bytes) else 'utf-8'
-        with open(temp_file, mode, encoding=encoding) as f:
-            f.write(content)
-        
-        # Move to final location
-        shutil.move(temp_file, final_file)
-        logging.info(f"Successfully processed: {url}")
-        
-        return True
+        if batch_storage and BatchStorageManager is not None:
+            # Get batch storage manager for this subfolder
+            batch_manager = BatchStorageManager.get_instance(
+                subfolder_path, start_idx, end_idx, update_frequency
+            )
+            
+            # Check if transcript already exists in batch storage
+            existing_content = batch_manager.get_transcript(transcript_id)
+            if existing_content:
+                logging.info(f"Transcript {transcript_id} already exists in batch storage")
+                return True
+            
+            # Process content using provided processor
+            content = processor(url)
+            
+            # Add to batch storage
+            metadata = {
+                "original_url": url,
+                "file_extension": file_extension,
+                "processed_at": datetime.now().isoformat()
+            }
+            
+            success = batch_manager.add_transcript(
+                transcript_id=transcript_id,
+                content=content,
+                url=url,
+                metadata=metadata
+            )
+            
+            if success:
+                logging.info(f"Added transcript {transcript_id} to batch storage")
+                return True
+            else:
+                logging.error(f"Failed to add transcript {transcript_id} to batch storage")
+                return False
+        else:
+            # Original individual file storage logic
+            # Create temp directory
+            base_dir = os.path.dirname(os.path.dirname(__file__))
+            temp_dir = os.path.join(base_dir, f'temp_downloaded_{file_extension}')
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Setup paths
+            temp_file = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.{file_extension}')
+            final_file = f'{output_filename}.{file_extension}'
+            
+            # Process content
+            content = processor(url)
+            
+            # Save to temp file
+            mode = 'wb' if isinstance(content, bytes) else 'w'
+            encoding = None if isinstance(content, bytes) else 'utf-8'
+            with open(temp_file, mode, encoding=encoding) as f:
+                f.write(content)
+            
+            # Move to final location
+            shutil.move(temp_file, final_file)
+            logging.info(f"Successfully processed: {url}")
+            
+            return True
         
     except Exception as e:
         logging.error(f"Error processing {url}: {str(e)}")
@@ -471,9 +536,10 @@ def download_and_process_generic_video(url: str, output_filename: str) -> bool:
         temp_opus = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.opus')
         final_opus = f'{output_filename}.opus'
 
-        # yt-dlp command with direct audio extraction
+        # yt-dlp command with direct audio extraction and proxy settings
         download_command = [
             'yt-dlp',
+            '--proxy', PROXY_URL,  # Add proxy
             '-x',  # Extract audio
             '--audio-format', 'opus',  # Convert to opus
             '--audio-quality', '96k',  # 96 kbps
@@ -734,8 +800,8 @@ def get_video_url(url: str, patterns: List[str]) -> Optional[str]:
     """
     response = None
     try:
-        # Initial GET request
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        # Initial GET request with proxy
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, proxies=PROXY_CONFIG)
         
         for pattern in patterns:
             if matches := re.findall(pattern, response.text, re.IGNORECASE):
@@ -744,7 +810,7 @@ def get_video_url(url: str, patterns: List[str]) -> Optional[str]:
                 # Add a small delay before the HEAD request
                 time.sleep(random.uniform(1, 2))  # Random delay between 1-2 seconds
                 
-                if requests.head(url_to_test, timeout=5).status_code == 200:
+                if requests.head(url_to_test, timeout=5, proxies=PROXY_CONFIG).status_code == 200:
                     return url_to_test
                 
                 # Add a small delay between pattern attempts if the HEAD request fails
@@ -828,7 +894,11 @@ def download_and_process_dynamic_html(html_link: str, output_filename: str) -> b
 
         # Use Playwright to get the fully rendered page
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = p.chromium.launch(proxy={
+                "server": f"http://168.151.206.16:20000",
+                "username": "island",
+                "password": "ausgeTrickst=)"
+            })
             page = browser.new_page()
             
             # Navigate and wait for network idle

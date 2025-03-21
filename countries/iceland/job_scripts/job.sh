@@ -31,6 +31,12 @@ else
     END_IDX=$(((SLURM_ARRAY_TASK_ID + 1) * FILES_PER_JOB))
 fi
 
+# Set batch storage options
+# Set to true to enable batch storage, false to use individual files
+USE_BATCH_STORAGE=true
+# How often to update batch files (every N transcripts)
+UPDATE_FREQUENCY=50
+
 cd ${DIRECTORY}
 
 # Activate conda
@@ -44,13 +50,19 @@ mkdir -p logs
 # Log start of job
 echo "Job started at: $(date)" >> logs/job_${SLURM_ARRAY_TASK_ID}.log
 echo "Processing files ${START_IDX} to ${END_IDX}" >> logs/job_${SLURM_ARRAY_TASK_ID}.log
+echo "Batch storage: ${USE_BATCH_STORAGE}" >> logs/job_${SLURM_ARRAY_TASK_ID}.log
+echo "Update frequency: ${UPDATE_FREQUENCY}" >> logs/job_${SLURM_ARRAY_TASK_ID}.log
 
-# Execute code with the CSV file
-python download_scripts/main.py \
-    --start_idx ${START_IDX} \
-    --end_idx ${END_IDX} \
-    --csv_file "iceland_links.csv" \
-    2>&1 | tee -a logs/job_${SLURM_ARRAY_TASK_ID}.log
+# Build command with conditional batch storage options
+CMD="python download_scripts/main.py --start_idx ${START_IDX} --end_idx ${END_IDX} --csv_file iceland_links.csv"
+
+if [ "${USE_BATCH_STORAGE}" = true ]; then
+    CMD="${CMD} --batch_storage --update_frequency ${UPDATE_FREQUENCY}"
+fi
+
+# Execute command
+echo "Running command: ${CMD}" >> logs/job_${SLURM_ARRAY_TASK_ID}.log
+eval ${CMD} 2>&1 | tee -a logs/job_${SLURM_ARRAY_TASK_ID}.log
 
 # Log end of job
 echo "Job finished at: $(date)" >> logs/job_${SLURM_ARRAY_TASK_ID}.log 
