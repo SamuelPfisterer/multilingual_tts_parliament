@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --mail-type=NONE
-#SBATCH --job-name=denmark_download
+#SBATCH --job-name=down_denmark
 #SBATCH --output=/itet-stor/spfisterer/net_scratch/Downloading/countries/denmark/logs/%j.out
 #SBATCH --error=/itet-stor/spfisterer/net_scratch/Downloading/countries/denmark/logs/%j.err
 #SBATCH --mem=8G
@@ -11,7 +11,7 @@
 ETH_USERNAME=spfisterer
 PROJECT_NAME=Downloading/countries/denmark
 DIRECTORY=/itet-stor/${ETH_USERNAME}/net_scratch/${PROJECT_NAME}
-CONDA_ENVIRONMENT=video_processing_py39
+CONDA_ENVIRONMENT=video_processing
 
 # Export library path to ensure shared libraries are found
 export LD_LIBRARY_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs/${CONDA_ENVIRONMENT}/lib:$LD_LIBRARY_PATH

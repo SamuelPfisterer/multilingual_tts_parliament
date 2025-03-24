@@ -83,7 +83,7 @@ def process_transcript_text(url: str) -> str:
 
 @browser(
     reuse_driver=True,
-    headless=False,
+    headless=True,
     proxy= "http://island:ausgeTrickst=)@168.151.206.16:20000"
 )
 def transcript_html_processor(driver: Driver, url: str):
