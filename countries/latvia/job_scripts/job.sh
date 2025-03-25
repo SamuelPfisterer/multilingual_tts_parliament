@@ -20,8 +20,8 @@ export PYTHONPATH=${DIRECTORY}:${PYTHONPATH}
 
 # Calculate start and end indices for this job
 # Adjust these numbers based on your CSV file size
-TOTAL_FILES=7000  # Replace with your actual number of sessions
-FILES_PER_JOB=1400  # Adjust based on TOTAL_FILES and desired number of jobs
+TOTAL_FILES=2620  # Updated total number of files
+FILES_PER_JOB=525  # 2620 files / 5 jobs = 524 files per job
 START_IDX=$((SLURM_ARRAY_TASK_ID * FILES_PER_JOB))
 if [ $SLURM_ARRAY_TASK_ID -eq 4 ]; then
     # Last batch handles remaining files
