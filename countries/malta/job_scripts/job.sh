@@ -1,14 +1,15 @@
 #!/bin/bash
 #SBATCH --mail-type=NONE
-#SBATCH --output=/itet-stor/spfisterer/net_scratch/Downloading/countries/latvia/logs/%j.out
-#SBATCH --error=/itet-stor/spfisterer/net_scratch/Downloading/countries/latvia/logs/%j.err
+#SBATCH --job-name=malta_download
+#SBATCH --output=/itet-stor/spfisterer/net_scratch/Downloading/countries/malta/logs/%j.out
+#SBATCH --error=/itet-stor/spfisterer/net_scratch/Downloading/countries/malta/logs/%j.err
 #SBATCH --mem=8G
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=2
-#SBATCH --array=0-4  # Adjust based on total number of files
+#SBATCH --array=0-3  # 4 jobs total
 
 ETH_USERNAME=spfisterer
-PROJECT_NAME=Downloading/countries/latvia
+PROJECT_NAME=Downloading/countries/malta
 DIRECTORY=/itet-stor/${ETH_USERNAME}/net_scratch/${PROJECT_NAME}
 CONDA_ENVIRONMENT=video_processing
 
@@ -19,11 +20,10 @@ export LD_LIBRARY_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs/${CONDA
 export PYTHONPATH=${DIRECTORY}:${PYTHONPATH}
 
 # Calculate start and end indices for this job
-# Adjust these numbers based on your CSV file size
-TOTAL_FILES=2620  # Updated total number of files
-FILES_PER_JOB=525  # 2620 files / 5 jobs = 524 files per job
+TOTAL_FILES=1612  # Total number of sessions
+FILES_PER_JOB=403  # Split into 4 roughly equal jobs
 START_IDX=$((SLURM_ARRAY_TASK_ID * FILES_PER_JOB))
-if [ $SLURM_ARRAY_TASK_ID -eq 4 ]; then
+if [ $SLURM_ARRAY_TASK_ID -eq 3 ]; then
     # Last batch handles remaining files
     END_IDX=${TOTAL_FILES}
 else
@@ -48,7 +48,7 @@ echo "Processing files ${START_IDX} to ${END_IDX}" >> logs/job_${SLURM_ARRAY_TAS
 python download_scripts/main.py \
     --start_idx ${START_IDX} \
     --end_idx ${END_IDX} \
-    --csv_file "latvia_links.csv" \
+    --csv_file "malta_links.csv" \
     2>&1 | tee -a logs/job_${SLURM_ARRAY_TASK_ID}.log
 
 # Log end of job

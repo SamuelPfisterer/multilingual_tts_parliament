@@ -547,7 +547,7 @@ def download_and_process_generic_video(url: str, output_filename: str) -> bool:
         # yt-dlp command with direct audio extraction and proxy settings
         download_command = [
             'yt-dlp',
-            '--proxy', PROXY_URL,  # Add proxy
+            #'--proxy', PROXY_URL,  # Add proxy
             '-x',  # Extract audio
             '--audio-format', 'opus',  # Convert to opus
             '--audio-quality', '96k',  # 96 kbps
@@ -934,6 +934,164 @@ def download_and_process_dynamic_html(html_link: str, output_filename: str) -> b
         
     except Exception as e:
         logging.error(f"Error processing dynamic HTML {html_link}: {str(e)}")
+        return False
+    finally:
+        # Cleanup temp directory if empty
+        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+            os.rmdir(temp_dir)
+
+def download_and_process_doc(doc_link: str, output_filename: str) -> bool:
+    """
+    Download Word document files (.doc or .docx).
+    
+    Args:
+        doc_link: Direct link to Word document
+        output_filename: Desired output filename (without extension)
+    """
+    try:
+        # Create temp directory
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        temp_dir = os.path.join(base_dir, 'temp_downloaded_transcript')
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        # Determine file extension from URL
+        ext = '.docx' if doc_link.lower().endswith('.docx') else '.doc'
+        
+        # Setup temporary and final paths
+        temp_doc = os.path.join(temp_dir, f'{os.path.basename(output_filename)}{ext}')
+        final_doc = f'{output_filename}{ext}'
+
+        # Download file using curl
+        download_command = [
+            'curl',
+            '-L',  # Follow redirects
+            '-o', temp_doc,  # Output file
+            doc_link
+        ]
+        
+        logging.info(f"Starting download for: {doc_link}")
+        result = subprocess.run(download_command, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logging.error(f"Curl error: {result.stderr}")
+            return False
+        
+        # Move to final location
+        shutil.move(temp_doc, final_doc)
+        logging.info(f"Successfully processed: {doc_link}")
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error processing {doc_link}: {str(e)}")
+        return False
+    finally:
+        # Cleanup temp directory if empty
+        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+            os.rmdir(temp_dir)
+
+def download_and_process_mp3(mp3_link: str, output_filename: str) -> bool:
+    """
+    Download MP3 audio file and convert to opus format.
+    Uses curl_cffi to bypass Cloudflare and other protections.
+    
+    Args:
+        mp3_link: Direct link to MP3 file
+        output_filename: Desired output filename (without extension)
+    """
+    try:
+        # Import curl_cffi here to avoid dependency issues if not installed
+        from curl_cffi import requests as curl_requests
+        from urllib.parse import unquote
+        
+        # Create temp directory
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        temp_dir = os.path.join(base_dir, 'temp_downloaded_audio')
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        # Setup temporary and final paths
+        temp_mp3 = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.mp3')
+        temp_opus = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.opus')
+        final_opus = f'{output_filename}.opus'
+
+        # Set headers to look more like a real browser
+        headers = {
+            "Referer": mp3_link.split('/Audio/')[0] if '/Audio/' in mp3_link else '/'.join(mp3_link.split('/')[0:3]),
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
+        }
+        
+        # Try multiple browser impersonations in case one fails
+        browser_types = ["chrome110", "chrome107", "safari15_3", "firefox91"]
+        download_success = False
+        
+        for browser in browser_types:
+            try:
+                logging.info(f"Trying to download {mp3_link} with {browser} impersonation...")
+                
+                # Make request with browser impersonation
+                response = curl_requests.get(
+                    mp3_link, 
+                    impersonate=browser,
+                    headers=headers,
+                    timeout=30
+                )
+                
+                # Check if request was successful
+                if response.status_code == 200:
+                    # Save the file
+                    with open(temp_mp3, "wb") as f:
+                        f.write(response.content)
+                    
+                    logging.info(f"Successfully downloaded using {browser} impersonation")
+                    download_success = True
+                    break
+                else:
+                    logging.warning(f"Failed with {browser}: HTTP {response.status_code}")
+            
+            except Exception as e:
+                logging.warning(f"Error with {browser}: {str(e)}")
+        
+        if not download_success:
+            logging.error(f"All browser impersonations failed for {mp3_link}")
+            return False
+            
+        # Convert MP3 to opus using ffmpeg
+        convert_command = [
+            'ffmpeg',
+            '-i', temp_mp3,
+            '-c:a', 'libopus',   # Opus codec
+            '-b:a', '96k',       # 96 kbps bitrate
+            '-ac', '1',          # Mono
+            '-ar', '24000',      # 24kHz
+            '-application', 'voip',  # Optimize for speech
+            temp_opus
+        ]
+        
+        logging.info(f"Converting MP3 to opus format")
+        result = subprocess.run(convert_command, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logging.error(f"FFmpeg error: {result.stderr}")
+            return False
+        
+        # Move to final location
+        shutil.move(temp_opus, final_opus)
+        
+        # Remove temporary MP3 file
+        if os.path.exists(temp_mp3):
+            os.remove(temp_mp3)
+            
+        logging.info(f"Successfully processed: {mp3_link}")
+        
+        return True
+        
+    except ImportError:
+        logging.error("curl_cffi not installed. Please install with: pip install curl_cffi")
+        return False
+    except Exception as e:
+        logging.error(f"Error processing {mp3_link}: {str(e)}")
         return False
     finally:
         # Cleanup temp directory if empty

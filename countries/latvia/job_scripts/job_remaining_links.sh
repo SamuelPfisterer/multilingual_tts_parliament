@@ -5,7 +5,7 @@
 #SBATCH --mem=8G
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=2
-#SBATCH --array=0-4  # Adjust based on total number of files
+#SBATCH --array=0-2  # 3 processes
 
 ETH_USERNAME=spfisterer
 PROJECT_NAME=Downloading/countries/latvia
@@ -18,16 +18,18 @@ export LD_LIBRARY_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs/${CONDA
 # Add current directory to Python path
 export PYTHONPATH=${DIRECTORY}:${PYTHONPATH}
 
+# Fixed range: 700 to 1050 (total of 351 rows)
+TOTAL_RANGE=351  # 1050 - 700 + 1
+ROWS_PER_JOB=$((TOTAL_RANGE / 3))  # Approximately 117 rows per job
+START_ROW=700  # First row to process
+
 # Calculate start and end indices for this job
-# Adjust these numbers based on your CSV file size
-TOTAL_FILES=2620  # Updated total number of files
-FILES_PER_JOB=525  # 2620 files / 5 jobs = 524 files per job
-START_IDX=$((SLURM_ARRAY_TASK_ID * FILES_PER_JOB))
-if [ $SLURM_ARRAY_TASK_ID -eq 4 ]; then
-    # Last batch handles remaining files
-    END_IDX=${TOTAL_FILES}
+START_IDX=$((START_ROW + SLURM_ARRAY_TASK_ID * ROWS_PER_JOB))
+if [ $SLURM_ARRAY_TASK_ID -eq 2 ]; then
+    # Last batch handles remaining rows up to 1050
+    END_IDX=1050
 else
-    END_IDX=$(((SLURM_ARRAY_TASK_ID + 1) * FILES_PER_JOB))
+    END_IDX=$((START_ROW + (SLURM_ARRAY_TASK_ID + 1) * ROWS_PER_JOB - 1))
 fi
 
 cd ${DIRECTORY}
@@ -41,15 +43,15 @@ conda activate ${CONDA_ENVIRONMENT}
 mkdir -p logs
 
 # Log start of job
-echo "Job started at: $(date)" >> logs/job_${SLURM_ARRAY_TASK_ID}.log
-echo "Processing files ${START_IDX} to ${END_IDX}" >> logs/job_${SLURM_ARRAY_TASK_ID}.log
+echo "Job started at: $(date)" >> logs/remaining_links_${SLURM_ARRAY_TASK_ID}.log
+echo "Processing rows ${START_IDX} to ${END_IDX}" >> logs/remaining_links_${SLURM_ARRAY_TASK_ID}.log
 
 # Execute code with the CSV file
 python download_scripts/main.py \
     --start_idx ${START_IDX} \
     --end_idx ${END_IDX} \
     --csv_file "latvia_links.csv" \
-    2>&1 | tee -a logs/job_${SLURM_ARRAY_TASK_ID}.log
+    2>&1 | tee -a logs/remaining_links_${SLURM_ARRAY_TASK_ID}.log
 
 # Log end of job
-echo "Job finished at: $(date)" >> logs/job_${SLURM_ARRAY_TASK_ID}.log 
+echo "Job finished at: $(date)" >> logs/remaining_links_${SLURM_ARRAY_TASK_ID}.log 

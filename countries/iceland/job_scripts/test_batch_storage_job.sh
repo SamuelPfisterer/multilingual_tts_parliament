@@ -20,8 +20,8 @@ export LD_LIBRARY_PATH=/itet-stor/${ETH_USERNAME}/net_scratch/conda_envs/${CONDA
 export PYTHONPATH=${DIRECTORY}:${PYTHONPATH}
 
 # For testing, we'll only process a few files
-START_IDX=100
-END_IDX=110
+START_IDX=7880
+END_IDX=7890
 
 # Set batch storage options
 # Set to true to enable batch storage

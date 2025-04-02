@@ -128,7 +128,7 @@ def transcript_html_processor(driver: Driver, url: str):
 
 @browser(
     reuse_driver=True,
-    headless=False,
+    headless=True,
     proxy= "http://island:ausgeTrickst=)@168.151.206.16:20000"
 )
 def transcript_text_processor(driver: Driver, url: str):
