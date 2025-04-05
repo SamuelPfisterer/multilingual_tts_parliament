@@ -43,12 +43,14 @@ mkdir -p logs
 # Log start of job
 echo "Job started at: $(date)" >> logs/job_${SLURM_ARRAY_TASK_ID}.log
 echo "Processing files ${START_IDX} to ${END_IDX}" >> logs/job_${SLURM_ARRAY_TASK_ID}.log
+echo "Redownloading transcripts: yes" >> logs/job_${SLURM_ARRAY_TASK_ID}.log
 
 # Execute code with the CSV file
 python download_scripts/main.py \
     --start_idx ${START_IDX} \
     --end_idx ${END_IDX} \
     --csv_file "malta_links.csv" \
+    --redownload_transcripts \
     2>&1 | tee -a logs/job_${SLURM_ARRAY_TASK_ID}.log
 
 # Log end of job

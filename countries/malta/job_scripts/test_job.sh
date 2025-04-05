@@ -36,12 +36,14 @@ mkdir -p logs
 # Log start of job
 echo "Job started at: $(date)" >> logs/test_job.log
 echo "Processing files ${START_IDX} to ${END_IDX}" >> logs/test_job.log
+echo "Redownloading transcripts: yes" >> logs/test_job.log
 
 # Execute code with the CSV file
 python download_scripts/main.py \
     --start_idx ${START_IDX} \
     --end_idx ${END_IDX} \
     --csv_file "malta_links.csv" \
+    --redownload_transcripts \
     2>&1 | tee -a logs/test_job.log
 
 # Log end of job

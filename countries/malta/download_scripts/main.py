@@ -270,7 +270,7 @@ def get_video_id(row: pd.Series) -> Optional[str]:
     return row.get('video_id')
 
 def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetings_full_links.csv', 
-         batch_storage: bool = False, update_frequency: int = 10) -> None:
+         batch_storage: bool = False, update_frequency: int = 10, redownload_transcripts: bool = False) -> None:
     """Process and download parliamentary meeting content for a range of entries.
 
     Downloads various media types (video, audio, subtitles, transcripts) for parliamentary
@@ -283,6 +283,7 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
         csv_file: Name of the input CSV file containing meeting information
         batch_storage: Whether to use batch storage for transcripts
         update_frequency: How often to update batch files (every N transcripts)
+        redownload_transcripts: Whether to redownload transcripts even if they exist in Supabase
 
     Raises:
         FileNotFoundError: If the specified CSV file doesn't exist
@@ -294,6 +295,9 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
     
     if batch_storage:
         logging.info(f"Batch storage enabled. Update frequency: every {update_frequency} transcripts")
+    
+    if redownload_transcripts:
+        logging.info("Redownload transcripts mode enabled. Will redownload transcripts even if they exist.")
 
     if not os.path.exists(RESULTS_FILE):
         with open(RESULTS_FILE, 'w', newline='') as f:
@@ -345,16 +349,19 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
                 continue
 
             # Check if session already exists in Supabase
-            if session_exists(session_id):
+            if session_exists(session_id) and not redownload_transcripts:
                 logging.info(f"Skipping session {session_id} - already exists in Supabase")
                 skipped_sessions += 1
                 continue
 
-            # Create download entry in Supabase
+            # Create download entry in Supabase only if it doesn't exist
             try:
-                create_download_entry(session_id)
+                if not session_exists(session_id):
+                    create_download_entry(session_id)
+                elif redownload_transcripts:
+                    logging.info(f"Session {session_id} exists - will update transcript status during download")
             except Exception as e:
-                logging.error(f"Failed to create Supabase entry for {session_id}: {str(e)}")
+                logging.error(f"Failed to create/update Supabase entry for {session_id}: {str(e)}")
                 continue
 
             for column, download_func in DOWNLOAD_FUNCTIONS.items():
@@ -408,7 +415,8 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
                                     batch_storage=batch_storage,
                                     update_frequency=update_frequency,
                                     start_idx=start_idx,
-                                    end_idx=end_idx
+                                    end_idx=end_idx,
+                                    redownload_transcripts=redownload_transcripts
                                 ),
                                 args=(row[column], filename),
                                 column_info=column_info,
@@ -422,7 +430,8 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
                                 func=download_func,
                                 args=(row[column], filename),
                                 column_info=column_info,
-                                session_id=session_id
+                                session_id=session_id,
+                                redownload_transcripts=redownload_transcripts
                             ):
                                 failed_downloads[modality].append(session_id)
                                 logging.error(f"Failed to download {column}: {session_id}")
@@ -469,6 +478,7 @@ if __name__ == "__main__":
     parser.add_argument("--csv_file", type=str, default='danish_parliament_meetings_full_links.csv', help="CSV file name")
     parser.add_argument("--batch_storage", action="store_true", help="Store transcripts in batch JSON files")
     parser.add_argument("--update_frequency", type=int, default=10, help="How often to update batch files (every N transcripts)")
+    parser.add_argument("--redownload_transcripts", action="store_true", help="Redownload transcripts even if already exists in Supabase")
 
     args = parser.parse_args()
-    main(args.start_idx, args.end_idx, args.csv_file, args.batch_storage, args.update_frequency)
+    main(args.start_idx, args.end_idx, args.csv_file, args.batch_storage, args.update_frequency, args.redownload_transcripts)

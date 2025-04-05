@@ -112,7 +112,8 @@ def download_and_process_with_custom_processor(
     batch_storage=False,
     update_frequency=10,
     start_idx=0,
-    end_idx=0
+    end_idx=0,
+    redownload_transcripts=False
 ) -> bool:
     """
     Download and process content using a custom processor function.
@@ -126,6 +127,7 @@ def download_and_process_with_custom_processor(
         update_frequency: How often to update the batch file
         start_idx: Starting row index for this process
         end_idx: Ending row index for this process
+        redownload_transcripts: Whether to redownload transcripts even if they exist
         
     Returns:
         bool: True if successful, False otherwise
@@ -148,7 +150,7 @@ def download_and_process_with_custom_processor(
             
             # Check if transcript already exists in batch storage
             existing_content = batch_manager.get_transcript(transcript_id)
-            if existing_content:
+            if existing_content and not redownload_transcripts:
                 logging.info(f"Transcript {transcript_id} already exists in batch storage")
                 return True
             
@@ -185,6 +187,11 @@ def download_and_process_with_custom_processor(
             # Setup paths
             temp_file = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.{file_extension}')
             final_file = f'{output_filename}.{file_extension}'
+            
+            # Check if file already exists
+            if os.path.exists(final_file) and not redownload_transcripts:
+                logging.info(f"Transcript file {final_file} already exists")
+                return True
             
             # Process content
             content = processor(url)
@@ -268,7 +275,7 @@ def get_file_size(file_path: str) -> int:
         logging.error(f"Failed to get file size: {str(e)}")
         return 0
 
-def with_retry(func, args, column_info, session_id):
+def with_retry(func, args, column_info, session_id, redownload_transcripts=False):
     """
     Generic retry wrapper that handles both patterns:
     - Functions returning False/True
@@ -278,12 +285,23 @@ def with_retry(func, args, column_info, session_id):
     """
     wait_times = [120, 240, 480, 960]  # 2, 4, 8, 16 minutes in seconds
     modality = column_info['modality']
+
+    time.sleep(random.uniform(1, 20))
     
     # Map local modality to Supabase modality
     supabase_modality = SUPABASE_MODALITY_MAPPING[modality]
     
-    # Start download tracking
-    start_download(session_id, supabase_modality)
+    # Only start download tracking if:
+    # 1. Not in redownload_transcripts mode, or
+    # 2. If in redownload_transcripts mode but it's not a transcript
+    if not (redownload_transcripts and supabase_modality == 'transcript'):
+        # Standard behavior - start tracking the download
+        start_download(session_id, supabase_modality)
+    else:
+        # In redownload_transcripts mode for transcripts, the status may already be "downloading"
+        # or "complete", but we want to reset it to "downloading"
+        logging.info(f"Redownloading transcript for session {session_id}")
+        start_download(session_id, supabase_modality, force=True)
     
     for attempt, wait_time in enumerate(wait_times, 1):
         try:
@@ -374,13 +392,14 @@ def get_bundestag_video_id(url):
 
 
 # Download and process audio links
-def download_and_process_mp4_video(mp4_link: str, output_filename: str) -> bool:
+def download_and_process_mp4_video(mp4_link: str, output_filename: str, redownload_transcripts: bool = False) -> bool:
     """
     Download MP4 and convert to opus audio format.
     
     Args:
         mp4_link: Direct link to MP4 file
         output_filename: Desired output filename (without extension)
+        redownload_transcripts: Whether to redownload even if exists (used for function signature compatibility)
     """
     try:
         # Create temp directory in parent folder (Germany/)
@@ -391,6 +410,11 @@ def download_and_process_mp4_video(mp4_link: str, output_filename: str) -> bool:
         # Setup temporary and final paths
         temp_opus = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.opus')
         final_opus = f'{output_filename}.opus'
+        
+        # Check if file already exists (this check is mostly for signature compatibility; audio is rarely redownloaded)
+        if os.path.exists(final_opus) and not redownload_transcripts:
+            logging.info(f"Audio file {final_opus} already exists and redownload not requested")
+            return True
 
         # Download and extract audio directly with ffmpeg
         download_command = [
@@ -581,13 +605,18 @@ def download_and_process_generic_video(url: str, output_filename: str) -> bool:
             os.rmdir(temp_dir)
 
 # Download and process transcript links
-def download_and_process_html(html_link: str, output_filename: str) -> bool:
+def download_and_process_html(html_link: str, output_filename: str, redownload_transcripts: bool = False) -> bool:
     """
     Download HTML file.
+    
+    Args:
+        html_link: Direct link to HTML file
+        output_filename: Desired output filename (without extension)
+        redownload_transcripts: Whether to redownload even if exists
     """
     try:
         add_download_delay()  # Add delay before download
-        # Create temp directory in parent folder (Germany/)
+        # Create temp directory in parent folder
         base_dir = os.path.dirname(os.path.dirname(__file__))
         temp_dir = os.path.join(base_dir, 'temp_downloaded_html')
         os.makedirs(temp_dir, exist_ok=True)
@@ -595,6 +624,11 @@ def download_and_process_html(html_link: str, output_filename: str) -> bool:
         # Setup temporary and final paths
         temp_html = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.html')
         final_html = f'{output_filename}.html'
+        
+        # Check if file already exists
+        if os.path.exists(final_html) and not redownload_transcripts:
+            logging.info(f"HTML file {final_html} already exists and redownload not requested")
+            return True
 
         # Download HTML file using curl
         download_command = [
@@ -886,10 +920,15 @@ def download_and_process_generic_m3u8_link(url: str, output_filename: str) -> bo
     # Use the existing m3u8 download function
     return download_and_process_m3u8_video(m3u8_url, output_filename)
 
-def download_and_process_dynamic_html(html_link: str, output_filename: str) -> bool:
+def download_and_process_dynamic_html(html_link: str, output_filename: str, redownload_transcripts: bool = False) -> bool:
     """
     Download HTML file using Playwright to handle dynamically loaded content.
     This function waits for the page to be fully loaded before saving the content.
+    
+    Args:
+        html_link: Direct link to dynamic HTML page
+        output_filename: Desired output filename (without extension)
+        redownload_transcripts: Whether to redownload even if exists
     """
     try:
         add_download_delay()  # Add delay before download
@@ -901,6 +940,11 @@ def download_and_process_dynamic_html(html_link: str, output_filename: str) -> b
         # Setup temporary and final paths
         temp_html = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.html')
         final_html = f'{output_filename}.html'
+        
+        # Check if file already exists
+        if os.path.exists(final_html) and not redownload_transcripts:
+            logging.info(f"Dynamic HTML file {final_html} already exists and redownload not requested")
+            return True
 
         # Use Playwright to get the fully rendered page
         with sync_playwright() as p:
@@ -940,15 +984,19 @@ def download_and_process_dynamic_html(html_link: str, output_filename: str) -> b
         if os.path.exists(temp_dir) and not os.listdir(temp_dir):
             os.rmdir(temp_dir)
 
-def download_and_process_doc(doc_link: str, output_filename: str) -> bool:
+def download_and_process_doc(doc_link: str, output_filename: str, redownload_transcripts: bool = True) -> bool:
     """
-    Download Word document files (.doc or .docx).
+    Download Word document files (.doc or .docx) using curl_cffi to bypass protections.
     
     Args:
         doc_link: Direct link to Word document
         output_filename: Desired output filename (without extension)
+        redownload_transcripts: Whether to redownload even if exists
     """
     try:
+        # Import curl_cffi here to avoid dependency issues if not installed
+        from curl_cffi import requests as curl_requests
+        
         # Create temp directory
         base_dir = os.path.dirname(os.path.dirname(__file__))
         temp_dir = os.path.join(base_dir, 'temp_downloaded_transcript')
@@ -960,28 +1008,68 @@ def download_and_process_doc(doc_link: str, output_filename: str) -> bool:
         # Setup temporary and final paths
         temp_doc = os.path.join(temp_dir, f'{os.path.basename(output_filename)}{ext}')
         final_doc = f'{output_filename}{ext}'
+        
+        # Check if file already exists
+        if os.path.exists(final_doc) and not redownload_transcripts:
+            logging.info(f"Document file {final_doc} already exists and redownload not requested")
+            return True
 
-        # Download file using curl
-        download_command = [
-            'curl',
-            '-L',  # Follow redirects
-            '-o', temp_doc,  # Output file
-            doc_link
-        ]
+        # Set headers to look more like a real browser
+        headers = {
+            "Referer": doc_link.split('/')[0] if '/' in doc_link else doc_link,
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
+        }
         
-        logging.info(f"Starting download for: {doc_link}")
-        result = subprocess.run(download_command, capture_output=True, text=True)
+        # Configure proxy
+        proxies = {"http": PROXY_URL, "https": PROXY_URL}
         
-        if result.returncode != 0:
-            logging.error(f"Curl error: {result.stderr}")
+        # Try multiple browser impersonations in case one fails
+        browser_types = ["chrome110", "chrome107", "safari15_3", "firefox91"]
+        download_success = False
+        
+        for browser in browser_types:
+            try:
+                logging.info(f"Trying to download {doc_link} with {browser} impersonation via proxy...")
+                
+                # Make request with browser impersonation and proxy
+                response = curl_requests.get(
+                    doc_link, 
+                    impersonate=browser,
+                    headers=headers,
+                    proxies=proxies,
+                    timeout=30
+                )
+                
+                # Check if request was successful
+                if response.status_code == 200:
+                    # Save the file
+                    with open(temp_doc, "wb") as f:
+                        f.write(response.content)
+                    
+                    logging.info(f"Successfully downloaded using {browser} impersonation with proxy")
+                    download_success = True
+                    break
+                else:
+                    logging.warning(f"Failed with {browser} via proxy: HTTP {response.status_code}")
+            
+            except Exception as e:
+                logging.warning(f"Error with {browser} via proxy: {str(e)}")
+        
+        if not download_success:
+            logging.error(f"All browser impersonations failed for {doc_link} using proxy")
             return False
-        
+            
         # Move to final location
         shutil.move(temp_doc, final_doc)
         logging.info(f"Successfully processed: {doc_link}")
         
         return True
         
+    except ImportError:
+        logging.error("curl_cffi not installed. Please install with: pip install curl_cffi")
+        return False
     except Exception as e:
         logging.error(f"Error processing {doc_link}: {str(e)}")
         return False

@@ -62,14 +62,42 @@ def session_exists(session_id: str) -> bool:
         logging.error(f"Error checking session existence: {str(e)}")
         return False  # Assume session doesn't exist if we can't check
 
-def start_download(session_id: str, modality: str) -> None:
-    """Record download start."""
+def start_download(session_id: str, modality: str, force: bool = False) -> None:
+    """
+    Record download start.
+    
+    Args:
+        session_id: Unique identifier for the download session
+        modality: Data modality (video, transcript)
+        force: If True, will set status to downloading even if it's currently completed
+    """
     client = get_supabase()
-    client.table('download_status').update({
-        'parliament_id': PARLIAMENT_ID,
-        f'{modality}_status': STATUS_DOWNLOADING,
-        f'{modality}_download_started': datetime.now().isoformat()
-    }).eq('session_id', session_id).execute()
+    
+    # If force is True, always update the status
+    # If force is False, only update if status is not already completed
+    if force:
+        # Always update status to downloading when force=True
+        client.table('download_status').update({
+            'parliament_id': PARLIAMENT_ID,
+            f'{modality}_status': STATUS_DOWNLOADING,
+            f'{modality}_download_started': datetime.now().isoformat()
+        }).eq('session_id', session_id).execute()
+    else:
+        # Only update if the status is not already completed
+        # First, get current status
+        response = client.table('download_status')\
+            .select(f'{modality}_status')\
+            .eq('session_id', session_id)\
+            .single()\
+            .execute()
+            
+        # If no data or status is not completed, update to downloading
+        if not response.data or response.data.get(f'{modality}_status') != STATUS_COMPLETED:
+            client.table('download_status').update({
+                'parliament_id': PARLIAMENT_ID,
+                f'{modality}_status': STATUS_DOWNLOADING,
+                f'{modality}_download_started': datetime.now().isoformat()
+            }).eq('session_id', session_id).execute()
 
 def complete_download(session_id: str, modality: str, metrics: Optional[Dict[str, Any]] = None) -> None:
     """Record successful download with metrics for videos."""
