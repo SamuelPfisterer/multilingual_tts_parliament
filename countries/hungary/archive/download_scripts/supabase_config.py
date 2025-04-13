@@ -1,5 +1,5 @@
 """
-Supabase configuration and utility functions for the Hungarian Parliament download system.
+Supabase configuration and utility functions for the Croatian Parliament download system.
 """
 
 from datetime import datetime
@@ -40,27 +40,6 @@ class SupabaseClient:
 def get_supabase() -> Client:
     """Get the Supabase client instance."""
     return SupabaseClient().client
-
-def session_exists(session_id: str) -> bool:
-    """Check if a session already exists in Supabase.
-    
-    Args:
-        session_id: Unique identifier for the download session
-        
-    Returns:
-        bool: True if session exists, False otherwise
-    """
-    try:
-        client = get_supabase()
-        response = client.table('download_status')\
-            .select('session_id')\
-            .eq('session_id', session_id)\
-            .eq('parliament_id', PARLIAMENT_ID)\
-            .execute()
-        return len(response.data) > 0
-    except Exception as e:
-        logging.error(f"Error checking session existence: {str(e)}")
-        return False  # Assume session doesn't exist if we can't check
 
 def start_download(session_id: str, modality: str) -> None:
     """Record download start."""
@@ -141,7 +120,7 @@ def get_download_status(session_id: str) -> Dict[str, Any]:
     return response.data if response else None
 
 def get_parliament_progress() -> Dict[str, Any]:
-    """Get the current progress for the Bulgarian parliament."""
+    """Get the current progress for the Croatian parliament."""
     client = get_supabase()
     response = client.table('parliament_progress')\
         .select('*')\

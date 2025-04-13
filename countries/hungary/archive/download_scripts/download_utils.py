@@ -9,25 +9,10 @@ import logging
 import yt_dlp
 import random
 import requests
-from typing import List, Optional, Protocol, Union, Tuple, Dict, Any
+from typing import List, Optional, Protocol, Union
 import csv
 from datetime import datetime
 from supabase_config import start_download, complete_download, fail_download
-from playwright.sync_api import sync_playwright
-
-# Proxy configuration
-PROXY_URL = "http://island:ausgeTrickst=)@168.151.206.16:20000"
-PROXY_CONFIG = {'http': PROXY_URL, 'https': PROXY_URL}
-
-try:
-    from batch_storage import BatchStorageManager
-except ImportError:
-    # Try relative import
-    try:
-        from .batch_storage import BatchStorageManager
-    except ImportError:
-        BatchStorageManager = None
-        logging.info("BatchStorageManager not available. Batch storage will be disabled.")
 
 class TranscriptProcessor(Protocol):
     """Protocol defining the interface for transcript processing functions."""
@@ -46,73 +31,11 @@ class TranscriptProcessor(Protocol):
         """
         ...
 
-class VideoLinkExtractor(Protocol):
-    """Protocol defining the interface for video link extraction functions."""
-    def __call__(self, url: str) -> Tuple[str, str]:
-        """
-        Process a video page URL and return the actual downloadable link and its type.
-        
-        Args:
-            url: The URL to process
-            
-        Returns:
-            Tuple[str, str]: (downloadable_url, link_type)
-            where link_type is one of: 'mp4_video_link', 'm3u8_link', etc.
-            matching the keys in DOWNLOAD_FUNCTIONS
-            
-        Raises:
-            Any exception that occurs during processing
-        """
-        ...
-
-def download_and_process_with_link_extractor(
-    url: str,
-    output_filename: str,
-    extractor: VideoLinkExtractor,
-    download_functions: Dict[str, Any]
-) -> bool:
-    """
-    Extract downloadable link using custom extractor and process with appropriate downloader.
-    
-    Args:
-        url: Source URL to process
-        output_filename: Where to save the processed file
-        extractor: Function that processes the URL and returns downloadable link
-        download_functions: Dictionary mapping link types to download functions
-        
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        # Extract the actual downloadable link and its type
-        logging.info(f"Extracting downloadable link from: {url}")
-        downloadable_url, link_type = extractor(url)
-        
-        # Validate the link type
-        if link_type not in download_functions:
-            raise ValueError(f"Unsupported link type returned by extractor: {link_type}")
-            
-        # Get the appropriate download function
-        download_func = download_functions[link_type]
-        
-        logging.info(f"Extracted {link_type} link: {downloadable_url}")
-        
-        # Download using the existing function
-        return download_func(downloadable_url, output_filename)
-        
-    except Exception as e:
-        logging.error(f"Error processing {url} with link extractor: {str(e)}")
-        return False
-
 def download_and_process_with_custom_processor(
     url: str, 
     output_filename: str,
     processor: TranscriptProcessor,
-    file_extension: str,
-    batch_storage=False,
-    update_frequency=10,
-    start_idx=0,
-    end_idx=0
+    file_extension: str
 ) -> bool:
     """
     Download and process content using a custom processor function.
@@ -122,91 +45,40 @@ def download_and_process_with_custom_processor(
         output_filename: Base filename for output (without extension)
         processor: Function that processes the URL and returns content
         file_extension: Extension for the output file (e.g., 'html', 'txt')
-        batch_storage: Whether to use batch storage
-        update_frequency: How often to update the batch file
-        start_idx: Starting row index for this process
-        end_idx: Ending row index for this process
         
     Returns:
         bool: True if successful, False otherwise
     """
-    # Initialize temp_dir to None before any code paths
-    temp_dir = None
-    
     try:
-        # Extract transcript ID from the output filename
-        transcript_id = os.path.basename(output_filename)
+        # Create temp directory
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        temp_dir = os.path.join(base_dir, f'temp_downloaded_{file_extension}')
+        os.makedirs(temp_dir, exist_ok=True)
         
-        # Get the subfolder path
-        subfolder_path = os.path.dirname(output_filename)
+        # Setup paths
+        temp_file = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.{file_extension}')
+        final_file = f'{output_filename}.{file_extension}'
         
-        if batch_storage and BatchStorageManager is not None:
-            # Get batch storage manager for this subfolder
-            batch_manager = BatchStorageManager.get_instance(
-                subfolder_path, start_idx, end_idx, update_frequency
-            )
-            
-            # Check if transcript already exists in batch storage
-            existing_content = batch_manager.get_transcript(transcript_id)
-            if existing_content:
-                logging.info(f"Transcript {transcript_id} already exists in batch storage")
-                return True
-            
-            # Process content using provided processor
-            content = processor(url)
-            
-            # Add to batch storage
-            metadata = {
-                "original_url": url,
-                "file_extension": file_extension,
-                "processed_at": datetime.now().isoformat()
-            }
-            
-            success = batch_manager.add_transcript(
-                transcript_id=transcript_id,
-                content=content,
-                url=url,
-                metadata=metadata
-            )
-            
-            if success:
-                logging.info(f"Added transcript {transcript_id} to batch storage")
-                return True
-            else:
-                logging.error(f"Failed to add transcript {transcript_id} to batch storage")
-                return False
-        else:
-            # Original individual file storage logic
-            # Create temp directory
-            base_dir = os.path.dirname(os.path.dirname(__file__))
-            temp_dir = os.path.join(base_dir, f'temp_downloaded_{file_extension}')
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # Setup paths
-            temp_file = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.{file_extension}')
-            final_file = f'{output_filename}.{file_extension}'
-            
-            # Process content
-            content = processor(url)
-            
-            # Save to temp file
-            mode = 'wb' if isinstance(content, bytes) else 'w'
-            encoding = None if isinstance(content, bytes) else 'utf-8'
-            with open(temp_file, mode, encoding=encoding) as f:
-                f.write(content)
-            
-            # Move to final location
-            shutil.move(temp_file, final_file)
-            logging.info(f"Successfully processed: {url}")
-            
-            return True
+        # Process content using provided processor
+        content = processor(url)
+        
+        # Save to temp file
+        mode = 'wb' if isinstance(content, bytes) else 'w'
+        encoding = None if isinstance(content, bytes) else 'utf-8'
+        with open(temp_file, mode, encoding=encoding) as f:
+            f.write(content)
+        
+        # Move to final location
+        shutil.move(temp_file, final_file)
+        logging.info(f"Successfully processed: {url}")
+        
+        return True
         
     except Exception as e:
         logging.error(f"Error processing {url}: {str(e)}")
         return False
     finally:
-        # Check if temp_dir exists and is not None before trying to clean it up
-        if temp_dir and os.path.exists(temp_dir) and not os.listdir(temp_dir):
+        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
             os.rmdir(temp_dir)
 
 # Map local modalities to Supabase modalities
@@ -296,10 +168,6 @@ def with_retry(func, args, column_info, session_id):
             elif isinstance(result, str):
                 error_msg = result
                 logging.warning(f"Attempt {attempt} failed: {error_msg}")
-                if "HTTP Error 404" in error_msg:
-                    fail_download(session_id, supabase_modality, error_msg, retry_count=attempt)
-                    logging.error(f"All attempts failed for {args} after {len(wait_times)} tries.")
-                    return False
             else:
                 # Success case
                 metrics = None
@@ -544,15 +412,12 @@ def download_and_process_generic_video(url: str, output_filename: str) -> bool:
         temp_opus = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.opus')
         final_opus = f'{output_filename}.opus'
 
-        # yt-dlp command with direct audio extraction and proxy settings
+        # yt-dlp command with direct audio extraction
         download_command = [
             'yt-dlp',
-            #'--proxy', PROXY_URL,  # Add proxy
             '-x',  # Extract audio
             '--audio-format', 'opus',  # Convert to opus
             '--audio-quality', '96k',  # 96 kbps
-            '--retries', '20',  # Increased retries
-            '--fragment-retries', '20',  # Added fragment retries
             '--postprocessor-args', '-ac 1 -ar 24000 -application voip',  # Your ffmpeg settings
             '-o', temp_opus,
             url
@@ -564,7 +429,7 @@ def download_and_process_generic_video(url: str, output_filename: str) -> bool:
         
         if result.returncode != 0:
             logging.error(f"yt-dlp error: {result.stderr}")
-            return f"yt-dlp error: {result.stderr}"
+            return False
         
         # Move to final location
         shutil.move(temp_opus, final_opus)
@@ -574,7 +439,7 @@ def download_and_process_generic_video(url: str, output_filename: str) -> bool:
         
     except Exception as e:
         logging.error(f"Error processing {url}: {str(e)}")
-        return f"Error processing {url}: {str(e)}"
+        return False
     finally:
         # Cleanup temp directory if empty
         if os.path.exists(temp_dir) and not os.listdir(temp_dir):
@@ -810,8 +675,8 @@ def get_video_url(url: str, patterns: List[str]) -> Optional[str]:
     """
     response = None
     try:
-        # Initial GET request with proxy
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, proxies=PROXY_CONFIG)
+        # Initial GET request
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
         
         for pattern in patterns:
             if matches := re.findall(pattern, response.text, re.IGNORECASE):
@@ -820,7 +685,7 @@ def get_video_url(url: str, patterns: List[str]) -> Optional[str]:
                 # Add a small delay before the HEAD request
                 time.sleep(random.uniform(1, 2))  # Random delay between 1-2 seconds
                 
-                if requests.head(url_to_test, timeout=5, proxies=PROXY_CONFIG).status_code == 200:
+                if requests.head(url_to_test, timeout=5).status_code == 200:
                     return url_to_test
                 
                 # Add a small delay between pattern attempts if the HEAD request fails
@@ -885,216 +750,4 @@ def download_and_process_generic_m3u8_link(url: str, output_filename: str) -> bo
     
     # Use the existing m3u8 download function
     return download_and_process_m3u8_video(m3u8_url, output_filename)
-
-def download_and_process_dynamic_html(html_link: str, output_filename: str) -> bool:
-    """
-    Download HTML file using Playwright to handle dynamically loaded content.
-    This function waits for the page to be fully loaded before saving the content.
-    """
-    try:
-        add_download_delay()  # Add delay before download
-        # Create temp directory in parent folder
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        temp_dir = os.path.join(base_dir, 'temp_downloaded_dynamic_html')
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # Setup temporary and final paths
-        temp_html = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.html')
-        final_html = f'{output_filename}.html'
-
-        # Use Playwright to get the fully rendered page
-        with sync_playwright() as p:
-            browser = p.chromium.launch(proxy={
-                "server": f"http://168.151.206.16:20000",
-                "username": "island",
-                "password": "ausgeTrickst=)"
-            })
-            page = browser.new_page()
-            
-            # Navigate and wait for network idle
-            page.goto(html_link, wait_until='networkidle')
-            
-            # Wait additional time for any dynamic content
-            page.wait_for_timeout(2000)  # 2 seconds
-            
-            # Get the full HTML content
-            content = page.content()
-            
-            # Save to temp file
-            with open(temp_html, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            browser.close()
-        
-        # Move to final location
-        shutil.move(temp_html, final_html)
-        logging.info(f"Successfully processed dynamic HTML: {html_link}")
-        
-        return True
-        
-    except Exception as e:
-        logging.error(f"Error processing dynamic HTML {html_link}: {str(e)}")
-        return False
-    finally:
-        # Cleanup temp directory if empty
-        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
-            os.rmdir(temp_dir)
-
-def download_and_process_doc(doc_link: str, output_filename: str) -> bool:
-    """
-    Download Word document files (.doc or .docx).
-    
-    Args:
-        doc_link: Direct link to Word document
-        output_filename: Desired output filename (without extension)
-    """
-    try:
-        # Create temp directory
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        temp_dir = os.path.join(base_dir, 'temp_downloaded_transcript')
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # Determine file extension from URL
-        ext = '.docx' if doc_link.lower().endswith('.docx') else '.doc'
-        
-        # Setup temporary and final paths
-        temp_doc = os.path.join(temp_dir, f'{os.path.basename(output_filename)}{ext}')
-        final_doc = f'{output_filename}{ext}'
-
-        # Download file using curl
-        download_command = [
-            'curl',
-            '-L',  # Follow redirects
-            '-o', temp_doc,  # Output file
-            doc_link
-        ]
-        
-        logging.info(f"Starting download for: {doc_link}")
-        result = subprocess.run(download_command, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            logging.error(f"Curl error: {result.stderr}")
-            return False
-        
-        # Move to final location
-        shutil.move(temp_doc, final_doc)
-        logging.info(f"Successfully processed: {doc_link}")
-        
-        return True
-        
-    except Exception as e:
-        logging.error(f"Error processing {doc_link}: {str(e)}")
-        return False
-    finally:
-        # Cleanup temp directory if empty
-        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
-            os.rmdir(temp_dir)
-
-def download_and_process_mp3(mp3_link: str, output_filename: str) -> bool:
-    """
-    Download MP3 audio file and convert to opus format.
-    Uses curl_cffi to bypass Cloudflare and other protections.
-    
-    Args:
-        mp3_link: Direct link to MP3 file
-        output_filename: Desired output filename (without extension)
-    """
-    try:
-        # Import curl_cffi here to avoid dependency issues if not installed
-        from curl_cffi import requests as curl_requests
-        from urllib.parse import unquote
-        
-        # Create temp directory
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        temp_dir = os.path.join(base_dir, 'temp_downloaded_audio')
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # Setup temporary and final paths
-        temp_mp3 = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.mp3')
-        temp_opus = os.path.join(temp_dir, f'{os.path.basename(output_filename)}.opus')
-        final_opus = f'{output_filename}.opus'
-
-        # Set headers to look more like a real browser
-        headers = {
-            "Referer": mp3_link.split('/Audio/')[0] if '/Audio/' in mp3_link else '/'.join(mp3_link.split('/')[0:3]),
-            "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Connection": "keep-alive",
-        }
-        
-        # Try multiple browser impersonations in case one fails
-        browser_types = ["chrome110", "chrome107", "safari15_3", "firefox91"]
-        download_success = False
-        
-        for browser in browser_types:
-            try:
-                logging.info(f"Trying to download {mp3_link} with {browser} impersonation...")
-                
-                # Make request with browser impersonation
-                response = curl_requests.get(
-                    mp3_link, 
-                    impersonate=browser,
-                    headers=headers,
-                    timeout=30
-                )
-                
-                # Check if request was successful
-                if response.status_code == 200:
-                    # Save the file
-                    with open(temp_mp3, "wb") as f:
-                        f.write(response.content)
-                    
-                    logging.info(f"Successfully downloaded using {browser} impersonation")
-                    download_success = True
-                    break
-                else:
-                    logging.warning(f"Failed with {browser}: HTTP {response.status_code}")
-            
-            except Exception as e:
-                logging.warning(f"Error with {browser}: {str(e)}")
-        
-        if not download_success:
-            logging.error(f"All browser impersonations failed for {mp3_link}")
-            return False
-            
-        # Convert MP3 to opus using ffmpeg
-        convert_command = [
-            'ffmpeg',
-            '-i', temp_mp3,
-            '-c:a', 'libopus',   # Opus codec
-            '-b:a', '96k',       # 96 kbps bitrate
-            '-ac', '1',          # Mono
-            '-ar', '24000',      # 24kHz
-            '-application', 'voip',  # Optimize for speech
-            temp_opus
-        ]
-        
-        logging.info(f"Converting MP3 to opus format")
-        result = subprocess.run(convert_command, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            logging.error(f"FFmpeg error: {result.stderr}")
-            return False
-        
-        # Move to final location
-        shutil.move(temp_opus, final_opus)
-        
-        # Remove temporary MP3 file
-        if os.path.exists(temp_mp3):
-            os.remove(temp_mp3)
-            
-        logging.info(f"Successfully processed: {mp3_link}")
-        
-        return True
-        
-    except ImportError:
-        logging.error("curl_cffi not installed. Please install with: pip install curl_cffi")
-        return False
-    except Exception as e:
-        logging.error(f"Error processing {mp3_link}: {str(e)}")
-        return False
-    finally:
-        # Cleanup temp directory if empty
-        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
-            os.rmdir(temp_dir)
 

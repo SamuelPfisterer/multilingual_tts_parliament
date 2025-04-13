@@ -16,17 +16,11 @@ from download_utils import (
     download_and_process_generic_video,
     download_and_process_html,
     download_and_process_generic_m3u8_link,
-    download_and_process_with_custom_processor,
-    download_and_process_dynamic_html,
-    download_and_process_with_link_extractor,
-    download_and_process_doc,
-    get_file_size,
-    get_video_duration,
-    download_and_process_mp3
+    download_and_process_with_custom_processor
 )
 import csv
-from typing import Dict, List, Set, Optional, Tuple
-from supabase_config import create_download_entry, session_exists, complete_download, start_download
+from typing import Dict, List
+from supabase_config import create_download_entry
 
 # Import the transcript processors individually
 # Note: Users need to implement these in their transcript_processors.py
@@ -51,17 +45,6 @@ except ImportError:
     except ImportError:
         logging.info("Text transcript processor not found.")
         process_transcript_text = None
-
-# Import video link extractor
-try:
-    from ..video_link_extractors import process_video_link
-except ImportError:
-    try:
-        # Try importing from parent directory directly
-        from video_link_extractors import process_video_link
-    except ImportError:
-        logging.info("Video link extractor not found.")
-        process_video_link = None
 
 """Main script for downloading and processing parliamentary meeting content.
 
@@ -112,10 +95,6 @@ COLUMN_TO_MODALITY = {
         'modality': 'audio',
         'subfolder': 'm3u8_streams'
     },
-    'processed_video_link': {
-        'modality': 'audio',
-        'subfolder': 'processed_video'
-    },
 
     # Transcript sources
     'pdf_link': {
@@ -125,10 +104,6 @@ COLUMN_TO_MODALITY = {
     'html_link': {
         'modality': 'transcript',
         'subfolder': 'html_transcripts'
-    },
-    'dynamic_html_link': {
-        'modality': 'transcript',
-        'subfolder': 'dynamic_html_transcripts'
     },
 
     # New processed transcript types
@@ -145,18 +120,6 @@ COLUMN_TO_MODALITY = {
     'srt_link': {
         'modality': 'subtitle',
         'subfolder': 'srt_subtitles'
-    },
-
-    # New Word document source
-    'doc_link': {
-        'modality': 'transcript',
-        'subfolder': 'doc_transcripts'
-    },
-
-    # New MP3 audio source
-    'mp3_link': {
-        'modality': 'audio',
-        'subfolder': 'mp3_audio'
     }
 }
 
@@ -168,27 +131,16 @@ DOWNLOAD_FUNCTIONS = {
     'generic_m3u8_link': download_and_process_generic_m3u8_link,
     'pdf_link': download_and_process_pdf,
     'html_link': download_and_process_html,
-    'dynamic_html_link': download_and_process_dynamic_html,
     'srt_link': download_and_process_srt,
     
-    # New processed transcript functions - update these to accept and pass additional kwargs
-    'processed_transcript_html_link': lambda url, output, **kwargs: download_and_process_with_custom_processor(
-        url, output, process_transcript_html, 'html', **kwargs
+    # New processed transcript functions
+    # Note: process_transcript_html and process_transcript_text need to be imported from transcript_processors.py
+    'processed_transcript_html_link': lambda url, output: download_and_process_with_custom_processor(
+        url, output, process_transcript_html, 'html'
     ),
-    'processed_transcript_text_link': lambda url, output, **kwargs: download_and_process_with_custom_processor(
-        url, output, process_transcript_text, 'txt', **kwargs
-    ),
-    
-    # New processed video function
-    'processed_video_link': lambda url, output: download_and_process_with_link_extractor(
-        url, output, process_video_link, DOWNLOAD_FUNCTIONS
-    ),
-
-    # New Word document function
-    'doc_link': download_and_process_doc,
-
-    # New MP3 audio function
-    'mp3_link': download_and_process_mp3
+    'processed_transcript_text_link': lambda url, output: download_and_process_with_custom_processor(
+        url, output, process_transcript_text, 'txt'
+    )
 }
 
 def setup_logging(job_id: str) -> None:
@@ -236,41 +188,7 @@ def validate_processor_availability(df: pd.DataFrame) -> None:
             "is available. Please implement process_transcript_text in transcript_processors.py"
         )
 
-def get_session_id(row: pd.Series) -> str:
-    """
-    Generate a unique session ID for the row.
-    
-    If both video_id and transcript_id are present and different, 
-    use a combination of both to ensure uniqueness.
-    
-    Args:
-        row: DataFrame row containing session information
-        
-    Returns:
-        Unique session ID string
-    """
-    video_id = row.get('video_id')
-    transcript_id = row.get('transcript_id')
-    
-    if video_id and transcript_id and video_id != transcript_id:
-        return f"{video_id}_{transcript_id}"
-    
-    return video_id or transcript_id or str(row.name)  # Fallback to row index if no IDs
-
-def get_video_id(row: pd.Series) -> Optional[str]:
-    """
-    Extract just the video ID from the row.
-    
-    Args:
-        row: DataFrame row containing session information
-        
-    Returns:
-        Video ID string or None if not present
-    """
-    return row.get('video_id')
-
-def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetings_full_links.csv', 
-         batch_storage: bool = False, update_frequency: int = 10) -> None:
+def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetings_full_links.csv') -> None:
     """Process and download parliamentary meeting content for a range of entries.
 
     Downloads various media types (video, audio, subtitles, transcripts) for parliamentary
@@ -281,8 +199,6 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
         start_idx: Starting index in the CSV file to process
         end_idx: Ending index in the CSV file to process
         csv_file: Name of the input CSV file containing meeting information
-        batch_storage: Whether to use batch storage for transcripts
-        update_frequency: How often to update batch files (every N transcripts)
 
     Raises:
         FileNotFoundError: If the specified CSV file doesn't exist
@@ -291,9 +207,6 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
     job_id = os.getenv('SLURM_ARRAY_TASK_ID', 'interactive')
     setup_logging(job_id)
     logging.info(f"Starting processing for videos {start_idx} to {end_idx}")
-    
-    if batch_storage:
-        logging.info(f"Batch storage enabled. Update frequency: every {update_frequency} transcripts")
 
     if not os.path.exists(RESULTS_FILE):
         with open(RESULTS_FILE, 'w', newline='') as f:
@@ -325,37 +238,18 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
                     os.makedirs(subfolder_path, exist_ok=True)
 
         successful_downloads = 0
-        skipped_sessions = 0
         failed_downloads = {key: [] for key in DIRECTORIES}
         failed_download_links = []
-        
-        # Track already downloaded videos to avoid duplicates
-        downloaded_videos = set()
 
         # Process each row in the DataFrame
         for _, row in tqdm(df.iterrows(), total=len(df), desc="Processing videos"):
-            # Generate a unique session ID for this row
-            session_id = get_session_id(row)
-            
-            # Get the video ID (may be the same across multiple rows)
-            video_id = get_video_id(row)
-            
-            if not session_id:
+            id_value = row.get('video_id') or row.get('transcript_id')
+            if not id_value:
                 logging.error("No valid ID found in row. Ensure 'video_id' or 'transcript_id' is present.")
                 continue
 
-            # Check if session already exists in Supabase
-            if session_exists(session_id):
-                logging.info(f"Skipping session {session_id} - already exists in Supabase")
-                skipped_sessions += 1
-                continue
-
             # Create download entry in Supabase
-            try:
-                create_download_entry(session_id)
-            except Exception as e:
-                logging.error(f"Failed to create Supabase entry for {session_id}: {str(e)}")
-                continue
+            create_download_entry(id_value)
 
             for column, download_func in DOWNLOAD_FUNCTIONS.items():
                 if column in row and pd.notna(row[column]):
@@ -364,81 +258,30 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
                         modality = column_info['modality']
                         subfolder = column_info['subfolder']
                         
-                        # For audio/video content, use video_id for the filename if available
-                        # This ensures all transcripts reference the same video file
-                        if modality == 'audio' and video_id:
-                            filename_id = video_id
-                        else:
-                            filename_id = session_id
-                            
                         # Create filename with subfolder
                         filename = os.path.join(
                             DIRECTORIES[modality],
                             subfolder,
-                            str(filename_id)
+                            str(id_value)
                         )
                         
-                        # For audio/video content, check if we've already downloaded this video
-                        if modality == 'audio' and video_id:
-                            # Check if this video has already been downloaded
-                            video_path = f"{filename}.opus"
-                            if video_id in downloaded_videos or os.path.exists(video_path):
-                                logging.info(f"Video {video_id} already downloaded, skipping download for session {session_id}")
-                                
-                                # Mark the video as completed in Supabase with 0 duration
-                                # First mark as downloading (required by Supabase workflow)
-                                start_download(session_id, 'video')
-                                
-                                # Then mark as completed with 0 duration for this session
-                                # (actual metrics are recorded with the first download)
-                                zero_metrics = {
-                                    'duration': 0,  # 0 seconds duration for duplicate videos
-                                    'size': 0       # 0 bytes size for duplicate videos
-                                }
-                                complete_download(session_id, 'video', zero_metrics)
-                                
-                                # Continue to next column (skip the download)
-                                continue
-                        
-                        # For transcript processors that support batch storage
-                        if batch_storage and column in ['processed_transcript_html_link', 'processed_transcript_text_link']:
-                            if not with_retry(
-                                func=lambda *args: download_func(
-                                    *args, 
-                                    batch_storage=batch_storage,
-                                    update_frequency=update_frequency,
-                                    start_idx=start_idx,
-                                    end_idx=end_idx
-                                ),
-                                args=(row[column], filename),
-                                column_info=column_info,
-                                session_id=session_id
-                            ):
-                                failed_downloads[modality].append(session_id)
-                                logging.error(f"Failed to download {column}: {session_id}")
-                        else:
-                            # Regular download function call
-                            if not with_retry(
-                                func=download_func,
-                                args=(row[column], filename),
-                                column_info=column_info,
-                                session_id=session_id
-                            ):
-                                failed_downloads[modality].append(session_id)
-                                logging.error(f"Failed to download {column}: {session_id}")
-                        
-                        if modality == 'audio' and video_id:
-                            # Mark this video as downloaded
-                            downloaded_videos.add(video_id)
+                        if not with_retry(
+                            func=download_func,
+                            args=(row[column], filename),
+                            column_info=column_info,
+                            session_id=id_value
+                        ):
+                            failed_downloads[modality].append(id_value)
+                            logging.error(f"Failed to download {column}: {id_value}")
                     except Exception as e:
-                        logging.error(f"Error processing {column} for {session_id}: {str(e)}")
+                        logging.error(f"Error processing {column} for {id_value}: {str(e)}")
 
             if not failed_downloads[modality]:
                 successful_downloads += 1
-                logging.info(f"Successfully processed all files for: {session_id}")
+                logging.info(f"Successfully processed all files for: {id_value}")
             else:
                 failed_download_links.append(row.get('link', 'Unknown link'))
-                logging.error(f"Failed to process: {session_id}")
+                logging.error(f"Failed to process: {id_value}")
 
         # Log failed downloads to results file
         with open(RESULTS_FILE, 'a', newline='') as f:
@@ -449,7 +292,6 @@ def main(start_idx: int, end_idx: int, csv_file: str = 'danish_parliament_meetin
 
         logging.info(f"\nProcessed rows {start_idx} to {end_idx}")
         logging.info(f"Successfully processed: {successful_downloads}")
-        logging.info(f"Skipped sessions: {skipped_sessions}")
         logging.info(f"Failed downloads: {sum(len(ids) for ids in failed_downloads.values())}")
 
         if failed_download_links:
@@ -467,8 +309,6 @@ if __name__ == "__main__":
     parser.add_argument("--start_idx", type=int, required=True, help="Starting index for processing")
     parser.add_argument("--end_idx", type=int, required=True, help="Ending index for processing")
     parser.add_argument("--csv_file", type=str, default='danish_parliament_meetings_full_links.csv', help="CSV file name")
-    parser.add_argument("--batch_storage", action="store_true", help="Store transcripts in batch JSON files")
-    parser.add_argument("--update_frequency", type=int, default=10, help="How often to update batch files (every N transcripts)")
 
     args = parser.parse_args()
-    main(args.start_idx, args.end_idx, args.csv_file, args.batch_storage, args.update_frequency)
+    main(args.start_idx, args.end_idx, args.csv_file)

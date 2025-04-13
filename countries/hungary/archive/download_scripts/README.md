@@ -30,15 +30,8 @@ Each URL must point to a file with the correct extension:
 - `mp4_video_link`: Direct link ending in `.mp4`
 - `youtube_link`: YouTube video URL
 - `m3u8_link`: Stream URL ending in `.m3u8`
-- `mp3_link`: Direct link ending in `.mp3` (uses curl_cffi to bypass Cloudflare and other protections)
-- `generic_video_link`: Any video/audio URL supported by yt-dlp, including:
-  - Direct video files (MP4, etc.)
-  - Direct audio files (MP3, etc.)
-  - Video streaming sites
-  - Web players
+- `generic_video_link`: Any video URL supported by yt-dlp
 - `generic_m3u8_link`: Webpage containing embedded m3u8 stream
-- `processed_video_link`: Link requiring custom extraction to get downloadable URL
-  - Requires implementing a video link extractor (see Video Link Extraction section)
   - To check if your URL is supported:
     1. Install yt-dlp: `pip install yt-dlp`
     2. Test your URL: `yt-dlp --simulate URL`
@@ -46,8 +39,6 @@ Each URL must point to a file with the correct extension:
 #### Transcript Sources
 - `pdf_link`: Direct link ending in `.pdf`
 - `html_link`: Link to HTML transcript page
-- `dynamic_html_link`: Link to dynamically loaded HTML page (uses Playwright)
-- `doc_link`: Direct link to Word document (.doc or .docx)
 - `processed_transcript_html_link`: Link to transcript page that needs custom HTML processing
 - `processed_transcript_text_link`: Link to transcript page that needs custom text processing
 
@@ -56,8 +47,8 @@ Each URL must point to a file with the correct extension:
 
 ### Example CSV Format
 ```csv
-video_id,mp4_video_link,doc_link,processed_transcript_html_link
-12345,https://example.com/video/12345.mp4,https://example.com/transcript/12345.docx,https://example.com/transcript/12345
+video_id,mp4_video_link,processed_transcript_html_link,processed_transcript_text_link
+12345,https://example.com/video/12345.mp4,https://example.com/transcript/12345,https://example.com/transcript/12345
 ```
 
 ## Output Directory Structure
@@ -72,7 +63,6 @@ BASE_DIR/
 ├── downloaded_transcript/         # All transcript content
 │   ├── pdf_transcripts/         # PDF format transcripts
 │   ├── html_transcripts/        # HTML format transcripts
-│   ├── dynamic_html_transcripts/ # Dynamically loaded HTML transcripts
 │   ├── processed_html_transcripts/  # Custom processed HTML transcripts
 │   └── processed_text_transcripts/  # Custom processed text transcripts
 └── downloaded_subtitle/           # All subtitle content
@@ -108,64 +98,7 @@ def process_transcript_text(url: str) -> str:
         return processed_text_content
     except Exception as e:
         raise ValueError(f"Failed to process text transcript: {str(e)}")
-
-## Video Link Extraction
-
-For parliaments that require custom processing to obtain downloadable video links (e.g., extracting m3u8 URLs from video pages):
-
-1. Create a `video_link_extractors.py` file in your parliament's directory
-2. Implement the extractor function:
-   ```python
-   def process_video_link(url: str) -> tuple[str, str]:
-       """Extract downloadable link from video page.
-       
-       Args:
-           url: The video page URL to process
-           
-       Returns:
-           tuple[str, str]: (downloadable_url, link_type) where
-           link_type is one of: 'mp4_video_link', 'm3u8_link', etc.
-           
-       Example:
-           url = "https://parliament.example.com/video/12345"
-           # Extract m3u8 URL from page
-           m3u8_url = extract_m3u8_from_page(url)
-           return m3u8_url, 'm3u8_link'
-       """
-       try:
-           # Your extraction logic here
-           # e.g., fetch page, parse HTML, find video URL
-           return downloadable_url, link_type
-       except Exception as e:
-           raise ValueError(f"Failed to extract video link: {str(e)}")
-   ```
-3. Use the `processed_video_link` column in your CSV
-
-The extractor must return a tuple containing:
-- `downloadable_url`: The actual URL that can be downloaded
-- `link_type`: One of the supported types matching existing download functions:
-  - 'mp4_video_link'
-  - 'm3u8_link'
-  - 'youtube_link'
-  - 'generic_video_link'
-  - 'generic_m3u8_link'
-
-This allows you to:
-1. Handle complex video pages that don't expose direct download links
-2. Extract embedded video URLs
-3. Transform video page URLs into downloadable formats
-4. Reuse existing download functionality for the extracted links
-
-Example CSV usage:
-```csv
-video_id,processed_video_link
-12345,https://parliament.example.com/video/12345
 ```
-
-The system will:
-1. Call your extractor to get the actual video URL
-2. Use the appropriate download function based on the returned link type
-3. Process and save the video as usual
 
 ## Example Usage
 
@@ -271,14 +204,3 @@ For different types of sources, you might need to:
    - Convert between subtitle formats
    - Handle timing synchronization
    - Process character encoding
-
-### Dependencies
-
-For dynamic HTML content, you'll need to install Playwright:
-
-```bash
-pip install playwright
-playwright install chromium
-```
-
-This is required for downloading transcripts from pages that load content dynamically using JavaScript.
