@@ -41,7 +41,7 @@ echo "Processing files ${START_IDX} to ${END_IDX}" >> logs/test_job.log
 python download_scripts/main.py \
     --start_idx ${START_IDX} \
     --end_idx ${END_IDX} \
-    --csv_file "iceland_links.csv" \
+    --csv_file "filtered_iceland_m3u8_links.csv" \
     2>&1 | tee -a logs/test_job.log
 
 # Log end of job
