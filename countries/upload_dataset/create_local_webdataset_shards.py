@@ -9,11 +9,18 @@ from pydub.exceptions import CouldntDecodeError
 import os
 import time
 import io
-from typing import Tuple, List, Optional, Dict, Set
+from typing import Tuple, List, Optional, Dict, Set, Protocol, Union
 import shutil
 import traceback
 import signal
 import sys
+import subprocess
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum, auto
+import multiprocessing
+from multiprocessing import Pool, Lock
+from functools import partial
 
 # Configure logging
 logging.basicConfig(
@@ -33,18 +40,205 @@ manifest_df = None
 country_manifest_path = None
 manifest_updates_collector = []
 
+# Global variables for TAR file tracking
+active_tar_file = None
+active_tar_temp_path = None
+active_tar_final_path = None
+
+class AudioExtractionMethod(Enum):
+    """Enum for different audio extraction methods."""
+    FFMPEG = auto()
+    PYDUB = auto()
+
+@dataclass
+class AudioSegment:
+    """Represents an audio segment with its raw bytes and format."""
+    audio_bytes: bytes
+    audio_format: str
+    duration_ms: int
+
+class AudioSegmentExtractor(ABC):
+    """Abstract base class for audio segment extraction."""
+    
+    @abstractmethod
+    def extract_segment(
+        self,
+        source_path: Path,
+        start_ms: int,
+        end_ms: int,
+        target_format: str
+    ) -> AudioSegment:
+        """Extract an audio segment from the source file."""
+        pass
+
+    @abstractmethod
+    def can_handle_file(self, file_path: Path) -> bool:
+        """Check if this extractor can handle the given file."""
+        pass
+
+class FFmpegSegmentExtractor(AudioSegmentExtractor):
+    """FFmpeg-based audio segment extractor."""
+    
+    def __init__(self):
+        # Verify ffmpeg is available
+        try:
+            subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            raise RuntimeError("FFmpeg is not available") from e
+
+    def can_handle_file(self, file_path: Path) -> bool:
+        """FFmpeg can handle any size file."""
+        return True
+
+    def extract_segment(
+        self,
+        source_path: Path,
+        start_ms: int,
+        end_ms: int,
+        target_format: str
+    ) -> AudioSegment:
+        """Extract segment using FFmpeg with efficient seeking."""
+        duration_ms = end_ms - start_ms
+        start_seconds = start_ms / 1000
+        duration_seconds = duration_ms / 1000
+
+        cmd = [
+            "ffmpeg",
+            "-ss", f"{start_seconds:.3f}",  # Seek position before input
+            "-i", str(source_path),
+            "-t", f"{duration_seconds:.3f}",  # Duration
+            "-c", "copy" if target_format == "opus" else target_format,  # Copy if opus, otherwise encode
+            "-f", target_format,  # Force format
+            "pipe:1"  # Output to stdout
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True
+            )
+            return AudioSegment(
+                audio_bytes=result.stdout,
+                audio_format=target_format,
+                duration_ms=duration_ms
+            )
+        except subprocess.CalledProcessError as e:
+            logging.error(f"FFmpeg extraction failed: {e.stderr.decode()}")
+            raise
+
+class PydubSegmentExtractor(AudioSegmentExtractor):
+    """Pydub-based audio segment extractor."""
+    
+    def can_handle_file(self, file_path: Path) -> bool:
+        """Pydub can't handle files > 4GB."""
+        return file_path.stat().st_size < 4 * 1024 * 1024 * 1024
+
+    def extract_segment(
+        self,
+        source_path: Path,
+        start_ms: int,
+        end_ms: int,
+        target_format: str
+    ) -> AudioSegment:
+        """Extract segment using Pydub."""
+        try:
+            audio = AudioSegment.from_file(str(source_path))
+            segment = audio[start_ms:end_ms]
+            
+            # Export to bytes
+            buffer = io.BytesIO()
+            segment.export(buffer, format=target_format)
+            return AudioSegment(
+                audio_bytes=buffer.getvalue(),
+                audio_format=target_format,
+                duration_ms=len(segment)
+            )
+        except Exception as e:
+            logging.error(f"Pydub extraction failed: {str(e)}")
+            raise
+
+class AudioSegmentExtractorFactory:
+    """Factory for creating appropriate audio segment extractors."""
+    
+    def __init__(self, preferred_method: AudioExtractionMethod = AudioExtractionMethod.FFMPEG):
+        self.extractors: List[AudioSegmentExtractor] = []
+        self.preferred_method = preferred_method
+        
+        # Try to initialize extractors
+        if preferred_method == AudioExtractionMethod.FFMPEG:
+            try:
+                self.extractors.append(FFmpegSegmentExtractor())
+            except RuntimeError:
+                logging.warning("FFmpeg not available, will try Pydub")
+        
+        # Always add Pydub as fallback
+        self.extractors.append(PydubSegmentExtractor())
+
+    def get_extractor(self, file_path: Path) -> AudioSegmentExtractor:
+        """Get the appropriate extractor for the file."""
+        for extractor in self.extractors:
+            if extractor.can_handle_file(file_path):
+                return extractor
+        raise ValueError(f"No suitable extractor found for {file_path}")
+
+def cleanup_and_close_tar():
+    """Safely close the active TAR file and move it to its final location."""
+    global active_tar_file, active_tar_temp_path, active_tar_final_path
+    
+    if active_tar_file is not None:
+        try:
+            logging.info("Closing active TAR file...")
+            active_tar_file.close()
+            
+            # If we have both temporary and final paths, try to move the file
+            if active_tar_temp_path and active_tar_final_path:
+                if active_tar_temp_path.exists():
+                    logging.info(f"Moving temporary TAR {active_tar_temp_path} to {active_tar_final_path}")
+                    try:
+                        # Ensure the target directory exists
+                        active_tar_final_path.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(active_tar_temp_path, active_tar_final_path)
+                        logging.info("TAR file moved successfully")
+                    except Exception as e:
+                        logging.error(f"Failed to move TAR file: {e}")
+                        # Don't delete temp file if move failed
+                        return
+            
+            # Clear the global variables
+            active_tar_file = None
+            active_tar_temp_path = None
+            active_tar_final_path = None
+            
+        except Exception as e:
+            logging.error(f"Error during TAR file cleanup: {e}")
+
 def signal_handler(signum, frame):
-    """Handle interruption signals by saving the manifest before exit."""
-    if manifest_df is not None and country_manifest_path is not None and manifest_updates_collector:
-        logging.info("Received interrupt signal. Saving manifest updates before exit...")
-        # Apply any pending updates
-        for original_idx, status, error_msg in manifest_updates_collector:
-            manifest_df.loc[original_idx, "webdataset_status"] = status
-            if pd.notna(error_msg) and error_msg:
-                manifest_df.loc[original_idx, "error_message"] = error_msg
+    """Handle interruption signals by cleaning up resources before exit."""
+    logging.info(f"Received signal {signum}. Starting cleanup...")
+    
+    # First, close any open TAR files
+    cleanup_and_close_tar()
+    
+    # Then save the manifest
+    if manifest_df is not None and country_manifest_path is not None:
+        logging.info("Saving manifest updates...")
+        # Apply any pending updates from the collector
+        if manifest_updates_collector:
+            for original_idx, status, error_msg in manifest_updates_collector:
+                if original_idx in manifest_df.index:
+                    manifest_df.loc[original_idx, "webdataset_status"] = status
+                    if pd.notna(error_msg) and error_msg:
+                        manifest_df.loc[original_idx, "error_message"] = error_msg
+            manifest_updates_collector.clear()
+        
+        # Save the manifest
         save_manifest_atomically(manifest_df, country_manifest_path)
-        logging.info("Manifest saved. Exiting...")
-    sys.exit(0)
+        logging.info("Manifest saved successfully")
+    
+    logging.info("Cleanup complete. Exiting...")
+    sys.exit(128 + signum)
 
 # Register signal handlers
 signal.signal(signal.SIGINT, signal_handler)
@@ -163,6 +357,21 @@ def add_segment_to_tar(
         manifest_updates_list.append((original_manifest_index, STATUS_ERROR_LOCAL_TAR_PROCESSING, f"TAR add error: {e}"))
         return 0
 
+def extract_segment_parallel(params: Tuple[Path, int, int, str, AudioExtractionMethod]) -> Tuple[Optional[AudioSegment], Optional[str]]:
+    """
+    Helper function for parallel segment extraction.
+    Returns tuple of (AudioSegment, error_message).
+    """
+    source_path, start_ms, end_ms, audio_format, extraction_method = params
+    try:
+        factory = AudioSegmentExtractorFactory(preferred_method=extraction_method)
+        extractor = factory.get_extractor(source_path)
+        audio_segment = extractor.extract_segment(source_path, start_ms, end_ms, audio_format)
+        return audio_segment, None
+    except Exception as e:
+        error_msg = f"Error extracting segment {start_ms}-{end_ms}: {str(e)}"
+        return None, error_msg
+
 def process_audio_file_segments(
     source_audio_path: str,
     segments_df: pd.DataFrame,
@@ -170,7 +379,9 @@ def process_audio_file_segments(
     audio_format: str,
     max_cer: Optional[float],
     manifest_updates_list: List[Tuple[int, str, str]],
-    should_save_manifest: bool = True  # New parameter
+    should_save_manifest: bool = True,
+    extraction_method: AudioExtractionMethod = AudioExtractionMethod.FFMPEG,
+    num_processes: int = 1
 ) -> Tuple[int, int]:
     """
     Process all pending segments from a single audio file.
@@ -183,6 +394,8 @@ def process_audio_file_segments(
         max_cer: Maximum allowed CER value (None for no filtering)
         manifest_updates_list: List to collect manifest updates
         should_save_manifest: Whether to save the manifest updates
+        extraction_method: AudioExtractionMethod = AudioExtractionMethod.FFMPEG
+        num_processes: int = 1
         
     Returns:
         Tuple of (total_bytes_added, segments_processed)
@@ -196,51 +409,90 @@ def process_audio_file_segments(
             save_manifest_updates()
         return 0, 0
 
-    try:
-        audio_obj = AudioSegment.from_file(source_audio_path)
-    except Exception as e:
-        error_status = STATUS_ERROR_LOCAL_TAR_AUDIO_LOAD
-        error_msg = f"Failed to load audio: {str(e)}\nTraceback:\n{traceback.format_exc()}"
-        logging.error(f"{error_msg} - {source_audio_path}")
-        for idx in segments_df.index:
-            manifest_updates_list.append((idx, error_status, error_msg))
-        if should_save_manifest:
-            save_manifest_updates()
-        return 0, 0
-
+    source_path = Path(source_audio_path)
     total_bytes_added = 0
     segments_processed = 0
 
-    # Process each segment from this audio file
-    for idx, segment in segments_df.iterrows():
-        # Check CER if needed
-        if max_cer is not None and segment.get("cer", 1.0) > max_cer:
-            manifest_updates_list.append((idx, STATUS_ERROR_LOCAL_TAR_CER, f"CER {segment['cer']:.4f} > {max_cer}"))
-            continue
+    # Filter segments by CER if needed
+    if max_cer is not None:
+        segments_df = segments_df[segments_df.get("cer", 1.0) <= max_cer].copy()
+        if segments_df.empty:
+            return 0, 0
 
-        # Extract segment
+    # Prepare segment parameters for parallel processing
+    segment_params = []
+    for idx, segment in segments_df.iterrows():
         start_ms = int(segment["start_seconds"] * 1000)
         end_ms = int(segment["end_seconds"] * 1000)
         if start_ms < 0: start_ms = 0
         if start_ms >= end_ms:
             manifest_updates_list.append((idx, STATUS_ERROR_LOCAL_TAR_PROCESSING, "Start time >= end time"))
             continue
+        segment_params.append((source_path, start_ms, end_ms, audio_format, extraction_method))
 
+    # Process segments in parallel if num_processes > 1
+    if num_processes > 1 and len(segment_params) > 1:
+        logging.info(f"Processing {len(segment_params)} segments in parallel with {num_processes} processes")
+        logging.info(f"Using {extraction_method} extraction method")
+        logging.info(f"Audio file being processed: {source_audio_path}")
+        with Pool(processes=num_processes) as pool:
+            results = pool.map(extract_segment_parallel, segment_params)
+            
+            # Process results and add to TAR
+            for (audio_segment, error_msg), (idx, segment) in zip(results, segments_df.iterrows()):
+                if error_msg:
+                    manifest_updates_list.append((idx, STATUS_ERROR_LOCAL_TAR_PROCESSING, error_msg))
+                    continue
+                    
+                if audio_segment:
+                    bytes_added = add_segment_to_tar(
+                        tar_obj,
+                        segment,
+                        audio_segment.audio_bytes,
+                        audio_segment.audio_format,
+                        manifest_updates_list
+                    )
+                    if bytes_added > 0:
+                        total_bytes_added += bytes_added
+                        segments_processed += 1
+    else:
+        # Single process mode
         try:
-            segment_audio = audio_obj[start_ms:end_ms]
-            audio_bytes_io = io.BytesIO()
-            segment_audio.export(audio_bytes_io, format=audio_format)
-            segment_audio_bytes = audio_bytes_io.getvalue()
-            audio_bytes_io.close()
+            factory = AudioSegmentExtractorFactory(preferred_method=extraction_method)
+            extractor = factory.get_extractor(source_path)
+            logging.info(f"Using {extractor.__class__.__name__} for extraction")
+            
+            for idx, segment in segments_df.iterrows():
+                start_ms = int(segment["start_seconds"] * 1000)
+                end_ms = int(segment["end_seconds"] * 1000)
+                if start_ms < 0: start_ms = 0
+                if start_ms >= end_ms:
+                    manifest_updates_list.append((idx, STATUS_ERROR_LOCAL_TAR_PROCESSING, "Start time >= end time"))
+                    continue
 
-            bytes_added = add_segment_to_tar(tar_obj, segment, segment_audio_bytes, audio_format, manifest_updates_list)
-            if bytes_added > 0:
-                total_bytes_added += bytes_added
-                segments_processed += 1
+                try:
+                    audio_segment = extractor.extract_segment(source_path, start_ms, end_ms, audio_format)
+                    bytes_added = add_segment_to_tar(
+                        tar_obj,
+                        segment,
+                        audio_segment.audio_bytes,
+                        audio_segment.audio_format,
+                        manifest_updates_list
+                    )
+                    if bytes_added > 0:
+                        total_bytes_added += bytes_added
+                        segments_processed += 1
 
-        except Exception as e:
-            logging.error(f"Error processing segment {segment['key']}: {e}")
-            manifest_updates_list.append((idx, STATUS_ERROR_LOCAL_TAR_PROCESSING, f"Segment processing error: {e}"))
+                except Exception as e:
+                    error_msg = f"Error processing segment {segment['key']}: {str(e)}\nTraceback:\n{traceback.format_exc()}"
+                    logging.error(error_msg)
+                    manifest_updates_list.append((idx, STATUS_ERROR_LOCAL_TAR_PROCESSING, error_msg))
+
+        except ValueError as e:
+            error_msg = f"No suitable audio extractor found: {str(e)}"
+            logging.error(error_msg)
+            for idx in segments_df.index:
+                manifest_updates_list.append((idx, STATUS_ERROR_LOCAL_TAR_AUDIO_LOAD, error_msg))
 
     # Save manifest updates after processing each audio file
     if should_save_manifest:
@@ -362,6 +614,19 @@ def verify_and_update_manifest(
     
     return updated_manifest
 
+def create_tar_file(path: Path, mode: str = "w") -> Tuple[tarfile.TarFile, Path, Path]:
+    """Create a new TAR file with temporary path."""
+    temp_path = path.with_suffix(f".tmp.{os.getpid()}")
+    tar_obj = tarfile.open(temp_path, mode)
+    return tar_obj, temp_path, path
+
+def set_active_tar(tar_obj: Optional[tarfile.TarFile], temp_path: Optional[Path], final_path: Optional[Path]):
+    """Set the currently active TAR file for tracking."""
+    global active_tar_file, active_tar_temp_path, active_tar_final_path
+    active_tar_file = tar_obj
+    active_tar_temp_path = temp_path
+    active_tar_final_path = final_path
+
 def main():
     global manifest_df, country_manifest_path, manifest_updates_collector
     
@@ -415,6 +680,19 @@ def main():
         action="store_true",
         help="When used with --status, verify TAR contents and update manifest accordingly.",
     )
+    parser.add_argument(
+        "--extraction-method",
+        type=str,
+        choices=["ffmpeg", "pydub"],
+        default="ffmpeg",
+        help="Audio extraction method to use (default: ffmpeg)",
+    )
+    parser.add_argument(
+        "--num-processes",
+        type=int,
+        default=1,
+        help="Number of parallel processes for segment extraction (default: 1)",
+    )
     args = parser.parse_args()
 
     if args.audio_format != "opus":
@@ -451,6 +729,9 @@ def main():
     except Exception as e:
         logging.error(f"Error loading splits {country_splits_path}: {e}")
         return
+
+    # Convert extraction method string to enum
+    extraction_method = AudioExtractionMethod.FFMPEG if args.extraction_method == "ffmpeg" else AudioExtractionMethod.PYDUB
 
     # If --status flag is used, show status report and exit
     if args.status:
@@ -572,7 +853,9 @@ def main():
                         args.audio_format,
                         args.max_cer,
                         manifest_updates_collector,
-                        should_save_manifest=True
+                        should_save_manifest=True,
+                        extraction_method=extraction_method,
+                        num_processes=args.num_processes
                     )
                     if segments_processed > 0:
                         logging.info(f"Added {segments_processed} segments ({bytes_added/1024/1024:.2f} MB) from {source_audio_path}")
@@ -642,18 +925,13 @@ def main():
                 
                 # Close current TAR if it exists
                 if active_train_tar_obj is not None:
-                    active_train_tar_obj.close()
-                    if active_train_tar_temp_path and active_train_tar_temp_path.exists():
-                        final_path = Path(str(active_train_tar_temp_path).replace(f".tmp.{os.getpid()}", ".tar"))
-                        os.replace(active_train_tar_temp_path, final_path)
-                        logging.info(f"Finished train shard {final_path}")
-                    train_shard_idx += 1  # Only increment when we actually need a new file
+                    cleanup_and_close_tar()
+                    train_shard_idx += 1
 
                 # Create new TAR
                 current_train_shard_path = output_train_dir / f"{args.country}-train-{train_shard_idx:05d}.tar"
-                active_train_tar_temp_path = current_train_shard_path.with_suffix(f".tmp.{os.getpid()}")
-                logging.info(f"Starting new train shard: {current_train_shard_path}")
-                active_train_tar_obj = tarfile.open(active_train_tar_temp_path, "w")
+                tar_obj, temp_path, final_path = create_tar_file(current_train_shard_path)
+                set_active_tar(tar_obj, temp_path, final_path)
                 active_train_tar_current_size_bytes = 0
 
             # Process this file's segments
@@ -664,20 +942,18 @@ def main():
                 args.audio_format,
                 args.max_cer,
                 manifest_updates_collector,
-                should_save_manifest=True
+                should_save_manifest=True,
+                extraction_method=extraction_method,
+                num_processes=args.num_processes
             )
             
             if segments_processed > 0:
                 active_train_tar_current_size_bytes += bytes_added
                 logging.info(f"Added {segments_processed} segments ({bytes_added/1024/1024:.2f} MB) from {source_audio_path}")
 
-        # Close final train TAR if it exists
+        # Don't forget to close the final TAR
         if active_train_tar_obj is not None:
-            active_train_tar_obj.close()
-            if active_train_tar_temp_path and active_train_tar_temp_path.exists():
-                final_path = Path(str(active_train_tar_temp_path).replace(f".tmp.{os.getpid()}", ".tar"))
-                os.replace(active_train_tar_temp_path, final_path)
-                logging.info(f"Finished final train shard {final_path}")
+            cleanup_and_close_tar()
 
         # Apply updates for train and save manifest
         for original_idx, status, error_msg in manifest_updates_collector:

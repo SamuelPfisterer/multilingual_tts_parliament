@@ -5,7 +5,7 @@
 #SBATCH --mail-type=ALL                 # Mail events (NONE, BEGIN, END, FAIL, ALL)
 #SBATCH --cpus-per-task=1              # Run on a single CPU
 #SBATCH --mem=60G                      # Request 60GB of memory
-#SBATCH --time=24:00:00                # Time limit hrs:min:sec
+#SBATCH --time=48:00:00                # Time limit hrs:min:sec (increased to 48h)
 #SBATCH --nodes=1                      # Run on a single node
 
 # --- User Configuration ---
@@ -43,6 +43,13 @@ fi
 echo "Conda environment activated."
 echo "Python executable: $(which python)"
 
+# Verify FFmpeg is available
+if ! command -v ffmpeg &> /dev/null; then
+    echo "FFmpeg is not available. Please install FFmpeg in the conda environment."
+    exit 1
+fi
+echo "FFmpeg version: $(ffmpeg -version | head -n 1)"
+
 # --- Job Information ---
 echo "-----------------------------------------"
 echo "Job Started: $(date)"
@@ -53,13 +60,21 @@ echo "Manifest Directory: ${MANIFEST_DIR}"
 echo "Output Directory: ${OUTPUT_DIR}"
 echo "-----------------------------------------"
 
+# First, check current status
+echo "\n--- Checking Current WebDataset Status for Serbia ---"
+python create_local_webdataset_shards.py \
+    --country serbia \
+    --status \
+    --check-tar
+
 # --- Run Script ---
 echo "\n--- Creating WebDataset Shards for Serbia ---"
 python create_local_webdataset_shards.py \
     --country serbia \
     --manifest-dir ${MANIFEST_DIR} \
     --output-dir ${OUTPUT_DIR} \
-    --max-shard-size-gb 1.0
+    --max-shard-size-gb 1.0 \
+    --extraction-method ffmpeg
 
 WEBDATASET_EXIT_CODE=$?
 echo "WebDataset creation finished with exit code: ${WEBDATASET_EXIT_CODE}"
