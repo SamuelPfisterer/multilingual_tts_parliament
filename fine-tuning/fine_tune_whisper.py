@@ -131,34 +131,28 @@ def load_and_prepare_data(dataset_repo_name: str, subset_name: str, feature_extr
         #download_mode="force_redownload"  # Ensures clean restart if previous failed
     )
 
-    train_dataset = dataset["train"]
-    validation_dataset = dataset["validation"]
+    train_dataset = dataset["train"].select(range(10000)) if dataset["train"].num_rows > 10000 else dataset["train"]
 
     logger.info(f"Loading Fleurs dataset for testing (subset: {fleurs_subset})")
     fleurs_dataset = load_dataset(FLEURS_DATASET_NAME, fleurs_subset, cache_dir=cache_dir, trust_remote_code=True)
-    test_dataset = fleurs_dataset["test"]
+    test_dataset = fleurs_dataset["test"].select(range(100))
 
     logger.info("Tokenizing datasets...")
     train_tokenized = train_dataset.map(
         prepare_dataset_helper,
         fn_kwargs={"feature_extractor": feature_extractor, "tokenizer": tokenizer, "text_column_name": "human_transcript"},
         remove_columns=train_dataset.column_names,
-        num_proc=1  # Can be increased based on available cores
+        num_proc=16  # Can be increased based on available cores
     )
-    validation_tokenized = validation_dataset.map(
-        prepare_dataset_helper,
-        fn_kwargs={"feature_extractor": feature_extractor, "tokenizer": tokenizer, "text_column_name": "human_transcript"},
-        remove_columns=validation_dataset.column_names,
-        num_proc=1
-    )
+
     test_tokenized = test_dataset.map(
         prepare_dataset_helper,
         fn_kwargs={"feature_extractor": feature_extractor, "tokenizer": tokenizer, "text_column_name": "transcription"},
         remove_columns=test_dataset.column_names,
-        num_proc=1
+        num_proc=16
     )
     logger.info("Dataset tokenization complete.")
-    return train_tokenized, validation_tokenized, test_tokenized
+    return train_tokenized, test_tokenized
 
 # --- Data Collator ---
 @dataclass
@@ -195,8 +189,11 @@ def get_compute_metrics_fn(processor, normalizer_fn):
 
         pred_str = processor.batch_decode(pred_ids, skip_special_tokens=True)
         label_str = processor.batch_decode(label_ids, skip_special_tokens=True)
-
-        wer_ortho = 100 * metric.compute(predictions=pred_str, references=label_str)
+        try:
+            wer_ortho = 100 * metric.compute(predictions=pred_str, references=label_str)
+        except Exception as e:
+            logger.error(f"Error computing WER for pred_str: {pred_str} and ref_str: {label_str}: {e}")
+            wer_ortho = 100
 
         pred_str_norm = [normalizer_fn(pred) for pred in pred_str]
         label_str_norm = [normalizer_fn(label) for label in label_str]
@@ -209,8 +206,11 @@ def get_compute_metrics_fn(processor, normalizer_fn):
             for i in range(len(label_str_norm))
             if len(label_str_norm[i]) > 0
         ]
-
-        wer = 100 * metric.compute(predictions=pred_str_norm, references=label_str_norm)
+        try:
+            wer = 100 * metric.compute(predictions=pred_str_norm, references=label_str_norm)
+        except Exception as e:
+            logger.error(f"Error computing WER for pred_str_norm: {pred_str_norm} and label_str_norm: {label_str_norm}: {e}")
+            wer = 100
         logger.debug(f"WER Ortho: {wer_ortho}, WER Normalized: {wer}")
         return {"wer_ortho": wer_ortho, "wer": wer}
 
@@ -316,7 +316,7 @@ def main(model_name: str, dataset_repo_name: str, subset_name: str, language: st
         logger.info(f"Using existing pad token: {processor.tokenizer.pad_token} (ID: {processor.tokenizer.pad_token_id})")
     logger.info(f"EOS token ID: {processor.tokenizer.eos_token_id}")
 
-    train_dataset, eval_dataset, test_dataset_final = load_and_prepare_data(
+    train_dataset, test_dataset_final = load_and_prepare_data(
         dataset_repo_name,
         subset_name,
         feature_extractor,
@@ -375,9 +375,9 @@ def main(model_name: str, dataset_repo_name: str, subset_name: str, language: st
         gradient_checkpointing=True,    # As per original script
         fp16=torch.cuda.is_available(), # Enable FP16 only if CUDA is available
         eval_strategy="steps",       # Changed from eval_strategy to evaluation_strategy
-        eval_steps=50,                  # As per original script, how often to evaluate
+        eval_steps=10,                  # As per original script, how often to evaluate
         save_strategy="steps",          # Changed from save_strategy to save_strategy
-        save_steps=100,                 # As per original script, how often to save checkpoints
+        save_steps=20,                 # As per original script, how often to save checkpoints
         per_device_eval_batch_size=32,  # As per original script
         predict_with_generate=True,     # As per original script
         generation_max_length=225,      # As per original script
@@ -400,7 +400,7 @@ def main(model_name: str, dataset_repo_name: str, subset_name: str, language: st
         args=training_args,
         model=model,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset, # Using the validation set from your primary dataset for evaluation during training
+        eval_dataset=test_dataset_final, # Using the validation set from your primary dataset for evaluation during training
         data_collator=data_collator,
         compute_metrics=compute_metrics_fn,
         tokenizer=processor.tokenizer, # Pass the tokenizer for processing generations
