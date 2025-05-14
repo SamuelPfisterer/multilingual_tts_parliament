@@ -131,11 +131,11 @@ def load_and_prepare_data(dataset_repo_name: str, subset_name: str, feature_extr
         #download_mode="force_redownload"  # Ensures clean restart if previous failed
     )
 
-    train_dataset = dataset["train"].select(range(10000)) if dataset["train"].num_rows > 10000 else dataset["train"]
+    train_dataset = dataset["train"]
 
     logger.info(f"Loading Fleurs dataset for testing (subset: {fleurs_subset})")
     fleurs_dataset = load_dataset(FLEURS_DATASET_NAME, fleurs_subset, cache_dir=cache_dir, trust_remote_code=True)
-    test_dataset = fleurs_dataset["test"].select(range(100))
+    test_dataset = fleurs_dataset["test"]
 
     logger.info("Tokenizing datasets...")
     train_tokenized = train_dataset.map(
@@ -366,7 +366,7 @@ def main(model_name: str, dataset_repo_name: str, subset_name: str, language: st
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir_name,
-        per_device_train_batch_size=32, # As per original script
+        per_device_train_batch_size=64, # As per original script
         gradient_accumulation_steps=2,  # As per original script
         learning_rate=1e-5,             # As per original script
         warmup_ratio=0.06,              # As per original script
@@ -375,10 +375,10 @@ def main(model_name: str, dataset_repo_name: str, subset_name: str, language: st
         gradient_checkpointing=True,    # As per original script
         fp16=torch.cuda.is_available(), # Enable FP16 only if CUDA is available
         eval_strategy="steps",       # Changed from eval_strategy to evaluation_strategy
-        eval_steps=10,                  # As per original script, how often to evaluate
+        eval_steps=32,                  # As per original script, how often to evaluate
         save_strategy="steps",          # Changed from save_strategy to save_strategy
-        save_steps=20,                 # As per original script, how often to save checkpoints
-        per_device_eval_batch_size=32,  # As per original script
+        save_steps=32,                 # As per original script, how often to save checkpoints
+        per_device_eval_batch_size=64,  # As per original script
         predict_with_generate=True,     # As per original script
         generation_max_length=225,      # As per original script
         logging_steps=10,               # As per original script
@@ -388,11 +388,13 @@ def main(model_name: str, dataset_repo_name: str, subset_name: str, language: st
         greater_is_better=False,        # As per original script
         push_to_hub=push_to_hub,        # Controlled by script argument
         save_total_limit=3,             # As per original script
+        seed=args.seed,
         # The following were not in the original Colab but are good practice or often needed.
         # Adjust as necessary.
         # remove_unused_columns=False, # Important for custom data collators usually
         # label_names=["labels"], # If your model expects labels in a specific way
     )
+    logger.info(f"Training arguments: {training_args.to_json_string()}")
 
     # --- Trainer Initialization ---
     logger.info("Initializing Trainer...")
@@ -509,6 +511,12 @@ if __name__ == "__main__":
         type=str,
         default=DEFAULT_OUTPUT_MODEL_NAME,
         help="Name to use for the fine-tuned model. If not provided, a name will be generated based on model and language."
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility."
     )
 
     args = parser.parse_args()
