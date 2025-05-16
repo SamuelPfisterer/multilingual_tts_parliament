@@ -62,7 +62,7 @@ def main():
         with_diarization=False,
         cer_threshold=0.8,
         language="lv",
-        batch_size=32,
+        batch_size=64,
         supabase_logging_enabled=True,
         parliament_id="latvia",
         html_processor=html_processor
