@@ -62,8 +62,8 @@ def filter_links(m3u8_file, downloaded_file, output_file):
 if __name__ == "__main__":
     # Define file paths relative to the script location or use absolute paths
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    m3u8_links_csv = os.path.join(script_dir, 'iceland_m3u8_links.csv')
+    m3u8_links_csv = os.path.join(script_dir, 'iceland_m3u8_links_with_ids.csv')
     downloaded_opus_csv = os.path.join(script_dir, 'downloaded_opus_files.csv')
-    filtered_output_csv = os.path.join(script_dir, 'filtered_iceland_m3u8_links.csv')
+    filtered_output_csv = os.path.join(script_dir, 'final_iceland_links_to_process.csv')
 
     filter_links(m3u8_links_csv, downloaded_opus_csv, filtered_output_csv)
