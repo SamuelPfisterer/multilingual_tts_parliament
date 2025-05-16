@@ -104,7 +104,8 @@ LANGUAGE_MAPPING = {
     "Latvian": {"name": "Latvian", "fleurs_code": "lv_lv"},
     "Slovenian": {"name": "Slovenian", "fleurs_code": "sl_si"},
     "Serbian": {"name": "Serbian", "fleurs_code": "sr_rs"},
-    "Estonian": {"name": "Estonian", "fleurs_code": "et_ee"}
+    "Estonian": {"name": "Estonian", "fleurs_code": "et_ee"},
+    "Bosnian": {"name": "Bosnian", "fleurs_code": "bs_ba"}
 }
 
 FLEURS_DATASET_NAME = "google/fleurs"
@@ -132,7 +133,8 @@ def load_and_prepare_data(dataset_repo_name: str, subset_name: str, feature_extr
     )
 
     train_dataset = dataset["train"]
-
+    # filter for 10% cer
+    train_dataset = train_dataset.filter(lambda x: x["cer"] < 0.1)
     logger.info(f"Loading Fleurs dataset for testing (subset: {fleurs_subset})")
     fleurs_dataset = load_dataset(FLEURS_DATASET_NAME, fleurs_subset, cache_dir=cache_dir, trust_remote_code=True)
     test_dataset = fleurs_dataset["test"]
@@ -426,9 +428,19 @@ def main(model_name: str, dataset_repo_name: str, subset_name: str, language: st
                 if gpu_monitoring and state.global_step % 10 == 0:  # Log every 10 steps
                     logger.info(f"GPU Stats at step {state.global_step}:")
                     log_gpu_stats()
+        
+        # Create a callback for logging evaluation metrics
+        class EvaluationLoggingCallback(TrainerCallback):
+            def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+                if metrics:
+                    metrics_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+                    logger.info(f"Evaluation metrics at step {state.global_step}: {metrics_str}")
 
         if gpu_monitoring:
             trainer.add_callback(GPUMonitoringCallback())
+            
+        # Always add the evaluation logging callback
+        trainer.add_callback(EvaluationLoggingCallback())
 
         trainer.train()
         logger.info("Training finished.")
