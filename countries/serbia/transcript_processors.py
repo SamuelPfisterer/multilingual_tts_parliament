@@ -72,7 +72,7 @@ def extract_page_content(soup: BeautifulSoup) -> str:
     return result
 
 @browser(reuse_driver=False, headless=True)
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=5, max=60))
+#@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=5, max=60))
 def processed_transcript_text_link(driver: Driver, url: str) -> str:
     """
     Process a transcript URL and return text content.
