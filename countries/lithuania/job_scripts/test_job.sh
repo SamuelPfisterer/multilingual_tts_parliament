@@ -21,7 +21,7 @@ export PYTHONPATH=${DIRECTORY}:${PYTHONPATH}
 
 # For testing, we'll only process the first 2 files
 START_IDX=0
-END_IDX=2
+END_IDX=20
 
 cd ${DIRECTORY}
 

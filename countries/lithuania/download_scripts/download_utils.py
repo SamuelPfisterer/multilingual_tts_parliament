@@ -955,7 +955,7 @@ def download_and_process_doc(doc_link: str, output_filename: str) -> bool:
         os.makedirs(temp_dir, exist_ok=True)
         
         # Determine file extension from URL
-        ext = '.docx' if '.docx' in doc_link.lower() else '.doc'
+        ext = '.docx' if 'docx' in doc_link.lower() else '.doc'
         
         # Setup temporary and final paths
         temp_doc = os.path.join(temp_dir, f'{os.path.basename(output_filename)}{ext}')

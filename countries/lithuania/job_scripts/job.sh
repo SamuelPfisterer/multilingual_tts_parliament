@@ -6,7 +6,7 @@
 #SBATCH --mem=8G
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=2
-#SBATCH --array=0-4  # 5 array jobs
+#SBATCH --array=0-19  # 20 array jobs
 
 ETH_USERNAME=spfisterer
 PROJECT_NAME=Downloading/countries/lithuania
@@ -22,9 +22,9 @@ export PYTHONPATH=${DIRECTORY}:${PYTHONPATH}
 # Calculate start and end indices for this job
 # Adjust these numbers based on your CSV file size
 TOTAL_FILES=6408  # Total number of sessions in CSV
-FILES_PER_JOB=1282  # Approx. 1282 files per job (6408 ÷ 5 = 1281.6)
+FILES_PER_JOB=320  # Approx. 320 files per job (6408 ÷ 20 = 320.4)
 START_IDX=$((SLURM_ARRAY_TASK_ID * FILES_PER_JOB))
-if [ $SLURM_ARRAY_TASK_ID -eq 4 ]; then
+if [ $SLURM_ARRAY_TASK_ID -eq 19 ]; then
     # Last batch handles remaining files
     END_IDX=${TOTAL_FILES}
 else
