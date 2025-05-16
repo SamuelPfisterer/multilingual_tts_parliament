@@ -1,3 +1,5 @@
+*.tar
+
 # Audio files
 *.opus
 *.mp3
@@ -30,10 +32,17 @@
 
 # Document files
 *.pdf
+*.docx
+*.doc
+*.xls
+*.xlsx
+*.ppt
+*.pptx
 
 # Text and HTML files
 *.html
 *.txt
+*.htm
 
 # Video/Audio temporary files
 *.part
@@ -46,6 +55,14 @@ temp_downloaded_audio/
 
 # Large data files
 *.csv
+*.json
+*.jsonl
+*.jsonl.gz
+*.jsonl.tar.gz
+*.jsonl.tar.bz2
+*.jsonl.tar.xz
+*.jsonl.tar.lzma
+*.jsonl.tar.7z
 
 # Python cache files
 __pycache__/
@@ -83,3 +100,13 @@ gmon.out
 *.tmp
 *.bak
 *.swp
+
+
+# ignore pkl files (this is cache)
+*.pkl
+*.pkl.gz
+*.pkl.tar.gz
+*.pkl.tar.bz2
+*.pkl.tar.xz
+*.pkl.tar.lzma
+*.pkl.tar.7z

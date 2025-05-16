@@ -22,7 +22,7 @@ def main():
     
     
     base_dir = "/itet-stor/spfisterer/net_scratch/Downloading/countries/estonia"
-    csv_path = f"{base_dir}/links/estonia_links.csv"
+    csv_path = f"{base_dir}/links/new_estonia_links.csv"
     alignment_output_dir = f"{base_dir}/Alignment/alignment_output"
 
     
@@ -66,7 +66,7 @@ def main():
         with_pydub_silences=False,
         html_processor=markdownify_html_processor,
         audio_dirs=["downloaded_audio"],
-        transcript_dirs=["downloaded_transcripts/downloaded_transcripts"],
+        transcript_dirs=["downloaded_transcripts/downloaded_transcripts", "downloaded_transcript/processed_text_transcripts"],
     )
 
      # Find already processed video IDs
@@ -84,9 +84,12 @@ def main():
     # Load all video IDs
     df = pd.read_csv(csv_path)
     all_video_ids = df["video_id"].astype(str).tolist()
-    
+
+    downloaded_video_ids = glob.glob(os.path.join(base_dir, "downloaded_audio", "*.opus"))
+    downloaded_video_ids = [os.path.basename(video_id).replace('.opus', '') for video_id in downloaded_video_ids]
+
     # Filter out already processed video IDs
-    video_ids_to_process = [vid for vid in all_video_ids if vid not in processed_video_ids]
+    video_ids_to_process = [vid for vid in all_video_ids if vid not in processed_video_ids and vid in downloaded_video_ids]
     total_ids = len(video_ids_to_process)
     
     print(f"Total video IDs to process: {total_ids} out of {len(all_video_ids)} total videos")

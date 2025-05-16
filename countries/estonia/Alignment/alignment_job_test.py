@@ -21,7 +21,7 @@ def main():
     
     
     base_dir = "/itet-stor/spfisterer/net_scratch/Downloading/countries/estonia"
-    csv_path = f"{base_dir}/links/estonia_links.csv"
+    csv_path = f"{base_dir}/links/new_estonia_links.csv"
     alignment_output_dir = f"{base_dir}/Alignment/alignment_output"
 
 
@@ -64,11 +64,11 @@ def main():
         with_pydub_silences=False,
         html_processor=markdownify_html_processor,
         audio_dirs=["downloaded_audio"],
-        transcript_dirs=["downloaded_transcripts/downloaded_transcripts"],
+        transcript_dirs=["downloaded_transcripts/downloaded_transcripts", "downloaded_transcript/processed_text_transcripts"],
     )
     
     # Process the subset
-    aligner.process_subset(["202105201000_crJVxpNkQB4"])
+    aligner.process_subset(["_OwcTTzZujw"])
 
 if __name__ == "__main__":
     main()

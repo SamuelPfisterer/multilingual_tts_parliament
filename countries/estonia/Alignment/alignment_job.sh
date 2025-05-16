@@ -7,12 +7,12 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --nodelist=tikgpu[02,03,04,05,06,09],lbbgpu01,artongpu[01,06,07]
-#SBATCH --array=0-8  # 9 jobs across the GPUs
+#SBATCH --nodelist=tikgpu[02,03,04,05,06,08,09],lbbgpu01,artongpu[01,06,07]
+#SBATCH --array=0-9  # 10 jobs across the GPUs
 
 ETH_USERNAME=spfisterer
 PROJECT_DIR=/itet-stor/${ETH_USERNAME}/net_scratch/Downloading/countries/estonia
-CONDA_ENVIRONMENT=rixvox
+CONDA_ENVIRONMENT=rixvox_python310
 
 # Exit on errors
 set -o errexit
@@ -43,7 +43,7 @@ conda activate ${CONDA_ENVIRONMENT}
 echo "Conda environment ${CONDA_ENVIRONMENT} activated"
 
 # Execute the Python script with the task ID
-python ${PROJECT_DIR}/Alignment/alignment_job.py ${SLURM_ARRAY_TASK_ID} 9
+python ${PROJECT_DIR}/Alignment/alignment_job.py ${SLURM_ARRAY_TASK_ID} 10
 
 # Send more noteworthy information to the output log
 echo "Finished at: $(date)"
